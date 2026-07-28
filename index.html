@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
+<title>Kasir Toko - Web POS</title>
+
+<!-- Tailwind CSS via CDN (untuk MVP/production ringan; untuk skala besar sebaiknya build via Tailwind CLI) -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          brand: {
+            50: '#eef2ff', 100:'#e0e7ff', 200:'#c7d2fe', 300:'#a5b4fc',
+            400:'#818cf8', 500:'#6366f1', 600:'#4f46e5', 700:'#4338ca',
+            800:'#3730a3', 900:'#312e81'
+          }
+        }
+      }
+    }
+  }
+</script>
+
+<!-- Chart.js untuk grafik di halaman Laporan -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+
+<style>
+  * { font-family: 'Inter', sans-serif; }
+  .font-mono-num { font-family: 'JetBrains Mono', monospace; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  .touch-target { min-height: 44px; min-width: 44px; }
+
+  @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes slideUp { from { transform: translateY(16px); opacity:0 } to { transform: translateY(0); opacity:1 } }
+  .anim-fade { animation: fadeIn .15s ease-out; }
+  .anim-slide { animation: slideUp .2s ease-out; }
+
+  /* ====== AREA CETAK STRUK (THERMAL) ====== */
+  #receipt-print-area { display: none; }
+
+  @media print {
+    body * { visibility: hidden; }
+    #receipt-print-area, #receipt-print-area * { visibility: visible; }
+    #receipt-print-area {
+      display: block !important;
+      position: absolute;
+      left: 0; top: 0;
+      width: var(--receipt-width, 80mm);
+      padding: 4mm;
+    }
+    @page { size: var(--receipt-width, 80mm) auto; margin: 0; }
+    .no-print { display: none !important; }
+  }
+</style>
+</head>
+
+<body class="bg-slate-100 text-slate-800 min-h-screen overflow-x-hidden">
+
+  <!-- ======= 1. WADAH LAYAR LOGIN (ditampilkan sebelum user login) ======= -->
+  <div id="auth-root" class="no-print"></div>
+
+  <!-- ======= 2. WADAH APLIKASI UTAMA (tersembunyi sampai berhasil login) ======= -->
+  <div id="app-root" class="hidden min-h-screen flex flex-col">
+
+    <header class="no-print bg-brand-700 text-white sticky top-0 z-30 shadow-md">
+      <div class="max-w-7xl mx-auto px-3 sm:px-6 flex items-center justify-between h-14">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-lg bg-white/15 flex items-center justify-center font-bold">K</div>
+          <span id="app-store-name" class="font-bold text-sm sm:text-base tracking-tight">Kasir Toko</span>
+        </div>
+
+        <nav class="hidden md:flex items-center gap-1">
+          <button data-tab="pos" class="nav-btn px-4 py-2 rounded-lg text-sm font-medium hover:bg-white/10 transition">🧾 Kasir</button>
+          <button data-tab="products" class="nav-btn px-4 py-2 rounded-lg text-sm font-medium hover:bg-white/10 transition">📦 Produk</button>
+          <button data-tab="history" class="nav-btn px-4 py-2 rounded-lg text-sm font-medium hover:bg-white/10 transition">📜 Riwayat</button>
+          <button data-tab="reports" class="nav-btn px-4 py-2 rounded-lg text-sm font-medium hover:bg-white/10 transition">📊 Laporan</button>
+          <button data-tab="settings" class="nav-btn px-4 py-2 rounded-lg text-sm font-medium hover:bg-white/10 transition">⚙️ Pengaturan</button>
+        </nav>
+
+        <div class="text-xs sm:text-sm font-mono-num bg-white/10 px-2 sm:px-3 py-1.5 rounded-lg" id="clock">--:--</div>
+      </div>
+    </header>
+
+    <main class="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-4 pb-24 md:pb-6">
+      <section id="tab-pos" class="tab-panel"></section>
+      <section id="tab-products" class="tab-panel hidden"></section>
+      <section id="tab-history" class="tab-panel hidden"></section>
+      <section id="tab-reports" class="tab-panel hidden"></section>
+      <section id="tab-settings" class="tab-panel hidden"></section>
+    </main>
+
+    <nav class="no-print md:hidden fixed bottom-0 inset-x-0 bg-white border-t border-slate-200 flex justify-around items-center h-16 z-30 shadow-[0_-2px_10px_rgba(0,0,0,0.05)]">
+      <button data-tab="pos" class="nav-btn-mobile flex flex-col items-center justify-center flex-1 h-full text-xs gap-0.5 touch-target">
+        <span class="text-lg">🧾</span><span>Kasir</span>
+      </button>
+      <button data-tab="products" class="nav-btn-mobile flex flex-col items-center justify-center flex-1 h-full text-xs gap-0.5 touch-target">
+        <span class="text-lg">📦</span><span>Produk</span>
+      </button>
+      <button data-tab="history" class="nav-btn-mobile flex flex-col items-center justify-center flex-1 h-full text-xs gap-0.5 touch-target">
+        <span class="text-lg">📜</span><span>Riwayat</span>
+      </button>
+      <button data-tab="reports" class="nav-btn-mobile flex flex-col items-center justify-center flex-1 h-full text-xs gap-0.5 touch-target">
+        <span class="text-lg">📊</span><span>Laporan</span>
+      </button>
+      <button data-tab="settings" class="nav-btn-mobile flex flex-col items-center justify-center flex-1 h-full text-xs gap-0.5 touch-target">
+        <span class="text-lg">⚙️</span><span>Setting</span>
+      </button>
+    </nav>
+
+  </div>
+
+  <!-- ======= 3. WADAH MODAL, TOAST, & AREA CETAK (bersama, dipakai lintas layar) ======= -->
+  <div id="modal-root" class="no-print"></div>
+  <div id="toast-root" class="no-print fixed top-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 items-center"></div>
+  <div id="receipt-print-area"></div>
+
+  <!-- ======= 4. ENTRY POINT JS (ES Module) ======= -->
+  <script type="module" src="js/main.js"></script>
+
+</body>
+</html>
