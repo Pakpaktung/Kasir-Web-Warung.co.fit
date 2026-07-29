@@ -13,10 +13,13 @@ import { renderHistory } from './ui-history.js';
 import { renderReports } from './ui-reports.js';
 import { renderSettings } from './ui-settings.js';
 import { showToast } from './utils.js';
+import { registerServiceWorker, listenForInstallPrompt, isInstallable, triggerInstallPrompt } from './pwa.js';
 
 let productsChannel = null;
 
 async function boot() {
+  registerServiceWorker();
+  setupInstallButton();
   const loggedIn = await tryRestoreSession();
   if (!loggedIn) {
     renderLoginScreen(startApp);
@@ -61,6 +64,29 @@ async function loadInitialData() {
     console.error(err);
     showToast('Gagal memuat data awal: ' + err.message, 'error');
   }
+}
+
+// Menampilkan tombol "Instal Aplikasi" di header HANYA saat browser
+// memberi sinyal aplikasi ini memenuhi syarat & belum terinstal.
+function setupInstallButton() {
+  const btn = document.getElementById('btn-install-app');
+  if (!btn) return;
+
+  listenForInstallPrompt((available) => {
+    btn.classList.toggle('hidden', !available);
+  });
+
+  btn.addEventListener('click', async () => {
+    const outcome = await triggerInstallPrompt();
+    if (outcome === 'accepted') {
+      showToast('Aplikasi berhasil diinstal!', 'success');
+      btn.classList.add('hidden');
+    }
+  });
+
+  // Fallback: kalau event beforeinstallprompt belum sempat tertangkap
+  // saat fungsi ini jalan, cek lagi sesaat kemudian.
+  setTimeout(() => btn.classList.toggle('hidden', !isInstallable()), 1500);
 }
 
 function setupNav() {
