@@ -11,8 +11,8 @@
 // JANGAN PERNAH menaruh "service_role key" di kode frontend/browser.
 // ============================================================================
 
-export const SUPABASE_URL = 'https://YOUR-PROJECT-REF.supabase.co';
-export const SUPABASE_ANON_KEY = 'YOUR-ANON-PUBLIC-KEY';
+export const SUPABASE_URL = 'https://tnarvzfkclrbvjyiyviq.supabase.co';
+export const SUPABASE_ANON_KEY = 'sb_publishable_DYfq0rehXQ-z66pEaU7deQ_gda2gYBQ';
 
 // Supabase JS SDK dimuat via CDN esm.sh (tanpa perlu npm/bundler)
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
