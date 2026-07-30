@@ -2,7 +2,13 @@
 -- KASIR TOKO - SKEMA DATABASE (Supabase / PostgreSQL)
 -- ----------------------------------------------------------------------------
 -- Cara pakai: buka Supabase Dashboard -> SQL Editor -> New Query -> tempel
--- seluruh isi file ini -> Run. Jalankan sekali saja pada project baru.
+-- seluruh isi file ini -> Run.
+--
+-- AMAN DIJALANKAN ULANG: file ini memakai "if not exists" / "or replace" /
+-- "add column if not exists" di semua bagian, jadi kalau Anda sudah pernah
+-- menjalankan versi sebelumnya dari skema ini, menjalankan ulang file yang
+-- sudah diperbarui (mis. setelah update fitur HPP/diskon/logo) TIDAK akan
+-- menghapus data yang ada -- hanya menambahkan kolom/fungsi yang belum ada.
 -- ============================================================================
 
 -- Ekstensi untuk generate UUID (biasanya sudah aktif di Supabase, aman dijalankan ulang)
@@ -47,7 +53,8 @@ create trigger on_auth_user_created
 create table if not exists products (
   id uuid primary key default gen_random_uuid(),
   name text not null,
-  price numeric(12,2) not null check (price >= 0),
+  price numeric(12,2) not null check (price >= 0),        -- harga jual
+  cost_price numeric(12,2) not null default 0 check (cost_price >= 0), -- HPP (harga pokok/modal)
   stock integer not null default 0 check (stock >= 0),
   category text not null default 'Lainnya',
   is_active boolean not null default true,
@@ -56,6 +63,9 @@ create table if not exists products (
 );
 
 create index if not exists idx_products_category on products(category);
+
+-- Migrasi aman untuk database yang sudah pernah dibuat sebelum kolom HPP ditambahkan
+alter table products add column if not exists cost_price numeric(12,2) not null default 0;
 
 
 -- ============================================================================
@@ -70,9 +80,13 @@ create table if not exists store_settings (
   tax_percent numeric(5,2) not null default 0,
   discount_percent numeric(5,2) not null default 0,
   receipt_width text not null default '80mm' check (receipt_width in ('58mm','80mm')),
+  logo_base64 text, -- logo struk dalam format Data URL base64 (mis. "data:image/png;base64,...."), NULL = tanpa logo
   constraint single_row check (id = 1)
 );
 insert into store_settings (id) values (1) on conflict (id) do nothing;
+
+-- Migrasi aman untuk database yang sudah pernah menjalankan versi skema sebelumnya
+alter table store_settings add column if not exists logo_base64 text;
 
 
 -- ============================================================================
@@ -101,6 +115,7 @@ create table if not exists transactions (
   cashier_id uuid not null references profiles(id),
   shift_id uuid references shifts(id),
   subtotal numeric(12,2) not null,
+  total_cost numeric(12,2) not null default 0, -- total HPP (modal) transaksi ini, untuk laporan laba
   discount_percent numeric(5,2) not null default 0,
   discount_amount numeric(12,2) not null default 0,
   tax_percent numeric(5,2) not null default 0,
@@ -116,9 +131,14 @@ create table if not exists transaction_items (
   transaction_id uuid not null references transactions(id) on delete cascade,
   product_id uuid references products(id) on delete set null,
   product_name text not null,   -- disalin saat transaksi, agar riwayat tetap benar walau produk diedit/dihapus
-  price numeric(12,2) not null, -- harga saat transaksi (bukan harga produk saat ini)
+  price numeric(12,2) not null, -- harga JUAL saat transaksi (bukan harga produk saat ini)
+  cost_price numeric(12,2) not null default 0, -- HPP saat transaksi, disalin dari products.cost_price (untuk laporan laba historis yang akurat)
   qty integer not null check (qty > 0)
 );
+
+-- Migrasi aman untuk database yang sudah pernah dibuat sebelum kolom-kolom ini ditambahkan
+alter table transactions add column if not exists total_cost numeric(12,2) not null default 0;
+alter table transaction_items add column if not exists cost_price numeric(12,2) not null default 0;
 
 create index if not exists idx_transactions_created_at on transactions(created_at desc);
 create index if not exists idx_transactions_cashier on transactions(cashier_id);
@@ -129,16 +149,24 @@ create index if not exists idx_transaction_items_trx on transaction_items(transa
 -- 6. RPC FUNCTION: create_transaction
 -- ----------------------------------------------------------------------------
 -- Checkout dilakukan lewat function ini (bukan INSERT langsung dari client) agar:
---   a) Harga produk dihitung ulang di server (klien tidak bisa memanipulasi harga)
+--   a) Harga & HPP produk dihitung ulang di server (klien tidak bisa memanipulasi harga)
 --   b) Pengurangan stok & pembuatan transaksi terjadi dalam SATU transaksi DB
 --      (atomik) sehingga tidak ada kondisi stok "kebobolan" saat race condition
 --   c) RLS bisa menutup akses insert langsung ke tabel transactions/products
 --      dari client, seluruh proses checkout wajib lewat function ini
+--
+-- Diskon: secara default memakai discount_percent dari store_settings (perilaku
+-- lama). Jika kasir memasukkan diskon manual di layar pembayaran (nominal Rp
+-- atau %), kirim `p_discount_amount` (nilai Rp final hasil hitungan di client)
+-- untuk MENIMPA diskon default tersebut. Server tetap membatasi nilainya agar
+-- tidak melebihi subtotal ataupun negatif, sehingga tidak bisa dimanipulasi
+-- jadi diskon > 100% dari DevTools.
 -- ============================================================================
 create or replace function create_transaction(
   p_items jsonb,              -- format: [{"product_id": "...", "qty": 2}, ...]
   p_paid numeric,
-  p_shift_id uuid default null
+  p_shift_id uuid default null,
+  p_discount_amount numeric default null  -- diskon manual (Rp), opsional; null = pakai discount_percent dari store_settings
 )
 returns jsonb
 language plpgsql
@@ -150,6 +178,8 @@ declare
   v_item jsonb;
   v_product products%rowtype;
   v_subtotal numeric(12,2) := 0;
+  v_total_cost numeric(12,2) := 0;
+  v_discount_percent numeric(5,2);
   v_discount_amount numeric(12,2);
   v_tax_amount numeric(12,2);
   v_total numeric(12,2);
@@ -162,7 +192,7 @@ begin
 
   select * into v_settings from store_settings where id = 1;
 
-  -- Validasi & hitung subtotal berdasarkan HARGA & STOK DI DATABASE (bukan dari client)
+  -- Validasi & hitung subtotal + total HPP berdasarkan HARGA/HPP/STOK DI DATABASE (bukan dari client)
   for v_item in select * from jsonb_array_elements(p_items)
   loop
     select * into v_product from products where id = (v_item->>'product_id')::uuid for update;
@@ -175,9 +205,19 @@ begin
     end if;
 
     v_subtotal := v_subtotal + (v_product.price * (v_item->>'qty')::int);
+    v_total_cost := v_total_cost + (coalesce(v_product.cost_price, 0) * (v_item->>'qty')::int);
   end loop;
 
-  v_discount_amount := round(v_subtotal * (v_settings.discount_percent / 100), 2);
+  -- Diskon: pakai nilai manual dari client jika dikirim, kalau tidak pakai default dari pengaturan toko.
+  -- Nilainya tetap DIBATASI (clamp) ke rentang [0, subtotal] di sini, di server -- bukan dipercaya mentah dari client.
+  if p_discount_amount is not null then
+    v_discount_amount := least(greatest(p_discount_amount, 0), v_subtotal);
+    v_discount_percent := case when v_subtotal > 0 then round((v_discount_amount / v_subtotal) * 100, 2) else 0 end;
+  else
+    v_discount_percent := v_settings.discount_percent;
+    v_discount_amount := round(v_subtotal * (v_settings.discount_percent / 100), 2);
+  end if;
+
   v_tax_amount := round((v_subtotal - v_discount_amount) * (v_settings.tax_percent / 100), 2);
   v_total := v_subtotal - v_discount_amount + v_tax_amount;
 
@@ -186,10 +226,10 @@ begin
   end if;
 
   insert into transactions (
-    id, code, cashier_id, shift_id, subtotal, discount_percent, discount_amount,
+    id, code, cashier_id, shift_id, subtotal, total_cost, discount_percent, discount_amount,
     tax_percent, tax_amount, total, paid, change
   ) values (
-    v_trx_id, v_trx_code, v_cashier_id, p_shift_id, v_subtotal, v_settings.discount_percent,
+    v_trx_id, v_trx_code, v_cashier_id, p_shift_id, v_subtotal, v_total_cost, v_discount_percent,
     v_discount_amount, v_settings.tax_percent, v_tax_amount, v_total, p_paid, p_paid - v_total
   );
 
@@ -197,8 +237,8 @@ begin
   loop
     select * into v_product from products where id = (v_item->>'product_id')::uuid;
 
-    insert into transaction_items (transaction_id, product_id, product_name, price, qty)
-    values (v_trx_id, v_product.id, v_product.name, v_product.price, (v_item->>'qty')::int);
+    insert into transaction_items (transaction_id, product_id, product_name, price, cost_price, qty)
+    values (v_trx_id, v_product.id, v_product.name, v_product.price, coalesce(v_product.cost_price, 0), (v_item->>'qty')::int);
 
     update products set stock = stock - (v_item->>'qty')::int, updated_at = now()
       where id = v_product.id;
@@ -226,29 +266,42 @@ returns boolean language sql stable as $$
 $$;
 
 -- PROFILES: semua user login boleh membaca daftar profil (untuk menampilkan nama kasir di struk/laporan)
+drop policy if exists "profiles_select_authenticated" on profiles;
 create policy "profiles_select_authenticated" on profiles for select to authenticated using (true);
 -- hanya admin yang boleh mengubah role/status user lain
+drop policy if exists "profiles_update_admin" on profiles;
 create policy "profiles_update_admin" on profiles for update to authenticated using (is_admin());
 
 -- PRODUCTS: semua user login boleh melihat; hanya admin boleh ubah data produk
 -- (pengurangan stok saat checkout terjadi lewat function create_transaction di atas, bukan lewat policy ini)
+drop policy if exists "products_select_authenticated" on products;
 create policy "products_select_authenticated" on products for select to authenticated using (true);
+drop policy if exists "products_insert_admin" on products;
 create policy "products_insert_admin" on products for insert to authenticated with check (is_admin());
+drop policy if exists "products_update_admin" on products;
 create policy "products_update_admin" on products for update to authenticated using (is_admin());
+drop policy if exists "products_delete_admin" on products;
 create policy "products_delete_admin" on products for delete to authenticated using (is_admin());
 
 -- STORE SETTINGS: semua user login boleh membaca; hanya admin boleh mengubah
+drop policy if exists "settings_select_authenticated" on store_settings;
 create policy "settings_select_authenticated" on store_settings for select to authenticated using (true);
+drop policy if exists "settings_update_admin" on store_settings;
 create policy "settings_update_admin" on store_settings for update to authenticated using (is_admin());
 
 -- SHIFTS: kasir hanya boleh lihat & buka/tutup shift miliknya sendiri; admin boleh lihat semua
+drop policy if exists "shifts_select_own_or_admin" on shifts;
 create policy "shifts_select_own_or_admin" on shifts for select to authenticated using (cashier_id = auth.uid() or is_admin());
+drop policy if exists "shifts_insert_own" on shifts;
 create policy "shifts_insert_own" on shifts for insert to authenticated with check (cashier_id = auth.uid());
+drop policy if exists "shifts_update_own_or_admin" on shifts;
 create policy "shifts_update_own_or_admin" on shifts for update to authenticated using (cashier_id = auth.uid() or is_admin());
 
 -- TRANSACTIONS & ITEMS: hanya bisa DIBACA (insert wajib lewat RPC create_transaction di atas)
 -- kasir hanya melihat transaksinya sendiri; admin melihat semua (untuk laporan)
+drop policy if exists "transactions_select_own_or_admin" on transactions;
 create policy "transactions_select_own_or_admin" on transactions for select to authenticated using (cashier_id = auth.uid() or is_admin());
+drop policy if exists "transaction_items_select_via_trx" on transaction_items;
 create policy "transaction_items_select_via_trx" on transaction_items for select to authenticated using (
   exists (
     select 1 from transactions t
@@ -267,9 +320,21 @@ create policy "transaction_items_select_via_trx" on transaction_items for select
 -- Aktifkan Realtime supaya perubahan stok/produk di satu perangkat langsung
 -- terlihat di perangkat lain tanpa refresh manual.
 -- Bisa juga diaktifkan lewat Dashboard -> Database -> Replication -> pilih tabel.
+-- Dibungkus blok DO + exception agar tidak error kalau tabel sudah pernah
+-- ditambahkan sebelumnya (ALTER PUBLICATION tidak mendukung "if not exists"
+-- di semua versi Postgres).
 -- ============================================================================
-alter publication supabase_realtime add table products;
-alter publication supabase_realtime add table transactions;
+do $$
+begin
+  alter publication supabase_realtime add table products;
+exception when duplicate_object then null;
+end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table transactions;
+exception when duplicate_object then null;
+end $$;
 
 
 -- ============================================================================

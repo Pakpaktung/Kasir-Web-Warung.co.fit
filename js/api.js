@@ -141,12 +141,16 @@ export async function closeShift(shiftId, endingCash, notes) {
 /* ----------------------------- TRANSACTIONS ------------------------------- */
 
 // Checkout: memanggil RPC function `create_transaction` di database (lihat sql/schema.sql).
-// Harga & validasi stok dihitung di server, bukan dipercaya dari input client.
-export async function checkout(items, paid, shiftId) {
+// Harga, HPP, & validasi stok dihitung di server, bukan dipercaya dari input client.
+// `discountAmount` opsional (Rp) - diisi kalau kasir memasukkan diskon manual di
+// layar pembayaran; kalau tidak dikirim (undefined/null), server memakai
+// discount_percent default dari store_settings seperti sebelumnya.
+export async function checkout(items, paid, shiftId, discountAmount = null) {
   const { data, error } = await supabase.rpc('create_transaction', {
     p_items: items.map(i => ({ product_id: i.productId, qty: i.qty })),
     p_paid: paid,
     p_shift_id: shiftId || null,
+    p_discount_amount: discountAmount,
   });
   if (error) throw error;
   return data; // { id, code, total, change }
@@ -180,13 +184,14 @@ export async function fetchTransactionById(id) {
 
 /* -------------------------------- LAPORAN --------------------------------- */
 
-// Mengambil seluruh transaksi dalam rentang tanggal untuk diagregasi di client.
-// Untuk skala data sangat besar, sebaiknya agregasi dipindah ke SQL (VIEW/RPC),
-// tapi untuk kebutuhan toko kecil-menengah, agregasi di client sudah cukup cepat.
+// Mengambil seluruh transaksi dalam rentang tanggal untuk diagregasi di client
+// (omzet, HPP, laba, produk terlaris). Untuk skala data sangat besar, sebaiknya
+// agregasi dipindah ke SQL (VIEW/RPC), tapi untuk kebutuhan toko kecil-menengah,
+// agregasi di client sudah cukup cepat.
 export async function fetchTransactionsForReport(fromISO, toISO) {
   const { data, error } = await supabase
     .from('transactions')
-    .select('id, code, created_at, total, cashier_id, transaction_items(product_name, qty, price)')
+    .select('id, code, created_at, subtotal, discount_amount, total_cost, total, cashier_id, transaction_items(product_name, qty, price, cost_price)')
     .gte('created_at', fromISO)
     .lte('created_at', toISO)
     .order('created_at');

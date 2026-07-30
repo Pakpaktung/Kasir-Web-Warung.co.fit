@@ -60,6 +60,7 @@ export function buildReceiptInnerHTML(t) {
   return `
     <div class="font-mono-num text-xs leading-relaxed text-slate-800">
       <div class="text-center mb-2">
+        ${s.logo_base64 ? `<img src="${s.logo_base64}" class="mx-auto mb-1" style="max-width:120px;max-height:70px;object-fit:contain" alt="Logo" />` : ''}
         <p class="font-bold text-sm">${escapeHtml(s.store_name)}</p>
         ${s.address ? `<p>${escapeHtml(s.address)}</p>` : ''}
         ${s.phone ? `<p>${escapeHtml(s.phone)}</p>` : ''}

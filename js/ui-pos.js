@@ -238,9 +238,21 @@ function renderCartSummary() {
   `;
 }
 
-function computeCartTotals() {
+// `discountOverride` opsional: { type: 'percent'|'amount', value }.
+// Kalau tidak diisi, pakai discount_percent default dari pengaturan toko (perilaku lama).
+function computeCartTotals(discountOverride = null) {
   const subtotal = state.cart.reduce((sum, i) => sum + i.price * i.qty, 0);
-  const discountAmount = Math.round(subtotal * (state.settings.discount_percent / 100));
+
+  let discountAmount;
+  if (discountOverride) {
+    discountAmount = discountOverride.type === 'percent'
+      ? Math.round(subtotal * (discountOverride.value / 100))
+      : Math.round(discountOverride.value);
+    discountAmount = Math.min(Math.max(discountAmount, 0), subtotal); // jaga tetap di rentang [0, subtotal]
+  } else {
+    discountAmount = Math.round(subtotal * (state.settings.discount_percent / 100));
+  }
+
   const afterDiscount = subtotal - discountAmount;
   const taxAmount = Math.round(afterDiscount * (state.settings.tax_percent / 100));
   return { subtotal, discountAmount, taxAmount, total: afterDiscount + taxAmount };
@@ -295,24 +307,39 @@ function refreshCartUI() {
 /* -------------------------------- PEMBAYARAN -------------------------------- */
 
 function openPaymentModal() {
-  const totals = computeCartTotals();
+  // State diskon LOKAL untuk modal ini saja: default mengikuti pengaturan toko,
+  // tapi kasir bisa mengubahnya (persen atau nominal Rp) sebelum konfirmasi bayar.
+  let discountState = { type: 'percent', value: state.settings.discount_percent || 0 };
+  let totals = computeCartTotals(discountState);
 
   openModal(`
     <div class="p-5">
       <h3 class="text-lg font-bold text-slate-800 mb-4">Pembayaran</h3>
-      <div class="bg-slate-50 rounded-xl p-4 mb-4 text-center">
-        <p class="text-xs text-slate-500 mb-1">Total Belanja</p>
-        <p class="text-3xl font-extrabold text-brand-700 font-mono-num">${formatRupiah(totals.total)}</p>
+
+      <!-- ============ PANEL DISKON (bisa diubah manual per-transaksi) ============ -->
+      <div class="bg-slate-50 rounded-xl p-3 mb-4">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-medium text-slate-600">Diskon</span>
+          <div class="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-semibold">
+            <button type="button" id="btn-discount-percent" class="px-3 py-1.5 touch-target">%</button>
+            <button type="button" id="btn-discount-amount" class="px-3 py-1.5 touch-target">Rp</button>
+          </div>
+        </div>
+        <input id="input-discount-value" type="number" min="0" value="${discountState.value}"
+          class="w-full h-11 px-3 rounded-xl border border-slate-200 font-mono-num focus:outline-none focus:ring-2 focus:ring-brand-500 touch-target" />
       </div>
+
+      <div class="bg-slate-50 rounded-xl p-4 mb-4 space-y-1 text-sm">
+        <div class="flex justify-between text-slate-500"><span>Subtotal</span><span id="sum-subtotal" class="font-mono-num">${formatRupiah(totals.subtotal)}</span></div>
+        <div class="flex justify-between text-slate-500"><span>Diskon</span><span id="sum-discount" class="font-mono-num text-red-500">-${formatRupiah(totals.discountAmount)}</span></div>
+        ${state.settings.tax_percent > 0 ? `<div class="flex justify-between text-slate-500"><span>Pajak (${state.settings.tax_percent}%)</span><span id="sum-tax" class="font-mono-num">${formatRupiah(totals.taxAmount)}</span></div>` : ''}
+        <div class="flex justify-between text-lg font-extrabold text-brand-700 pt-1 border-t border-dashed border-slate-200"><span>Total</span><span id="sum-total" class="font-mono-num">${formatRupiah(totals.total)}</span></div>
+      </div>
+
       <label class="text-sm font-medium text-slate-600">Uang Dibayar</label>
       <input id="input-paid" type="number" inputmode="numeric" placeholder="0"
         class="w-full h-14 mt-1 mb-2 px-4 rounded-xl border border-slate-200 text-2xl font-bold font-mono-num focus:outline-none focus:ring-2 focus:ring-brand-500 touch-target" />
-      <div class="grid grid-cols-4 gap-2 mb-4">
-        ${[totals.total, 20000, 50000, 100000].map(n => `
-          <button class="quick-pay-btn touch-target h-10 rounded-lg bg-slate-100 hover:bg-brand-100 text-xs font-semibold text-slate-600" data-amount="${n}">
-            ${n === totals.total ? 'Pas' : formatRupiah(n)}
-          </button>`).join('')}
-      </div>
+      <div id="quick-pay-buttons" class="grid grid-cols-4 gap-2 mb-4"></div>
       <div class="flex justify-between items-center bg-emerald-50 rounded-xl p-4 mb-5">
         <span class="text-sm font-medium text-emerald-700">Kembalian</span>
         <span id="change-display" class="text-xl font-bold text-emerald-700 font-mono-num">Rp0</span>
@@ -327,6 +354,39 @@ function openPaymentModal() {
   const input = document.getElementById('input-paid');
   const changeDisplay = document.getElementById('change-display');
   const confirmBtn = document.getElementById('btn-confirm-pay');
+  const discountValueInput = document.getElementById('input-discount-value');
+  const btnDiscountPercent = document.getElementById('btn-discount-percent');
+  const btnDiscountAmount = document.getElementById('btn-discount-amount');
+
+  function renderQuickPayButtons() {
+    document.getElementById('quick-pay-buttons').innerHTML = [totals.total, 20000, 50000, 100000].map(n => `
+      <button class="quick-pay-btn touch-target h-10 rounded-lg bg-slate-100 hover:bg-brand-100 text-xs font-semibold text-slate-600" data-amount="${n}">
+        ${n === totals.total ? 'Pas' : formatRupiah(n)}
+      </button>`).join('');
+    document.querySelectorAll('.quick-pay-btn').forEach(btn => {
+      btn.addEventListener('click', () => { input.value = btn.dataset.amount; updateChange(); });
+    });
+  }
+
+  function updateDiscountTypeButtons() {
+    const activeCls = ['bg-brand-600', 'text-white'];
+    const inactiveCls = ['bg-white', 'text-slate-500'];
+    btnDiscountPercent.classList.remove(...activeCls, ...inactiveCls);
+    btnDiscountAmount.classList.remove(...activeCls, ...inactiveCls);
+    btnDiscountPercent.classList.add(...(discountState.type === 'percent' ? activeCls : inactiveCls));
+    btnDiscountAmount.classList.add(...(discountState.type === 'amount' ? activeCls : inactiveCls));
+  }
+
+  function recalculate() {
+    totals = computeCartTotals(discountState);
+    document.getElementById('sum-subtotal').textContent = formatRupiah(totals.subtotal);
+    document.getElementById('sum-discount').textContent = '-' + formatRupiah(totals.discountAmount);
+    const taxEl = document.getElementById('sum-tax');
+    if (taxEl) taxEl.textContent = formatRupiah(totals.taxAmount);
+    document.getElementById('sum-total').textContent = formatRupiah(totals.total);
+    renderQuickPayButtons();
+    updateChange();
+  }
 
   function updateChange() {
     const paid = Number(input.value) || 0;
@@ -337,10 +397,24 @@ function openPaymentModal() {
     confirmBtn.disabled = paid < totals.total;
   }
 
-  input.addEventListener('input', updateChange);
-  document.querySelectorAll('.quick-pay-btn').forEach(btn => {
-    btn.addEventListener('click', () => { input.value = btn.dataset.amount; updateChange(); });
+  btnDiscountPercent.addEventListener('click', () => {
+    discountState.type = 'percent';
+    updateDiscountTypeButtons();
+    recalculate();
   });
+  btnDiscountAmount.addEventListener('click', () => {
+    discountState.type = 'amount';
+    updateDiscountTypeButtons();
+    recalculate();
+  });
+  discountValueInput.addEventListener('input', () => {
+    discountState.value = Number(discountValueInput.value) || 0;
+    recalculate();
+  });
+
+  updateDiscountTypeButtons();
+  renderQuickPayButtons();
+  input.addEventListener('input', updateChange);
 
   document.getElementById('btn-cancel-pay').addEventListener('click', closeModal);
   confirmBtn.addEventListener('click', async () => {
@@ -350,14 +424,15 @@ function openPaymentModal() {
     confirmBtn.textContent = 'Memproses...';
 
     try {
-      // Checkout diproses di server (function create_transaction) supaya
-      // harga & stok tervalidasi ulang di database, bukan hanya dipercaya dari client.
-      const result = await api.checkout(state.cart, paid, state.currentShift.id);
+      // Checkout diproses di server (function create_transaction) supaya harga,
+      // HPP, & stok tervalidasi ulang di database. `totals.discountAmount` yang
+      // sudah dihitung di sini dikirim sebagai diskon manual final; server tetap
+      // membatasi nilainya ke rentang [0, subtotal] sebagai pengaman tambahan.
+      const result = await api.checkout(state.cart, paid, state.currentShift.id, totals.discountAmount);
       state.cart = [];
       closeModal();
       showToast('Transaksi berhasil disimpan', 'success');
 
-      // Muat ulang detail transaksi lengkap (termasuk item) untuk ditampilkan di struk
       const fullTrx = await api.fetchTransactionById(result.id);
       renderPOS();
       showReceiptModal(fullTrx);

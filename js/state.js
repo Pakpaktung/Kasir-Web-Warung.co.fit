@@ -18,6 +18,7 @@ export const state = {
     tax_percent: 0,
     discount_percent: 0,
     receipt_width: '80mm',
+    logo_base64: null,
   },
 
   // --- UI ---

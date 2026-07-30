@@ -4,7 +4,7 @@
 
 import { state, isAdmin } from './state.js';
 import * as api from './api.js';
-import { escapeHtml, showToast, withLoading, openModal, closeModal } from './utils.js';
+import { escapeHtml, showToast, withLoading, openModal, closeModal, resizeImageToDataUrl } from './utils.js';
 import { connectPrinter, disconnectPrinter, isPrinterConnected, getPrinterName } from './escpos.js';
 import { logout } from './auth.js';
 
@@ -25,10 +25,20 @@ export async function renderSettings() {
       <p class="text-xs text-brand-600 font-semibold uppercase">${state.profile.role}</p>
     </div>
 
+    <!-- ============ LOGO STRUK (khusus admin) ============ -->
+    ${canEdit ? `
+    <div class="bg-white rounded-2xl border border-slate-200 p-5 max-w-lg mb-4">
+      <h3 class="font-bold text-slate-800 mb-1 text-sm">🖼️ Logo Struk</h3>
+      <p class="text-xs text-slate-400 mb-3">Logo akan tampil di bagian atas struk saat dicetak lewat browser. Gunakan gambar persegi/landscape sederhana untuk hasil terbaik.</p>
+      <div id="logo-preview-area" class="flex items-center gap-4">
+        ${renderLogoPreview()}
+      </div>
+    </div>` : ''}
+
     <!-- ============ PRINTER THERMAL ============ -->
     <div class="bg-white rounded-2xl border border-slate-200 p-5 max-w-lg mb-4">
       <h3 class="font-bold text-slate-800 mb-1 text-sm">🖨️ Printer Thermal (ESC/POS)</h3>
-      <p class="text-xs text-slate-400 mb-3">Hubungkan printer Bluetooth untuk cetak cepat tanpa dialog print browser. Hanya didukung di Chrome/Edge (Desktop & Android).</p>
+      <p class="text-xs text-slate-400 mb-3">Hubungkan printer Bluetooth untuk cetak cepat tanpa dialog print browser. Hanya didukung di Chrome/Edge (Desktop & Android). Catatan: logo struk saat ini hanya tampil pada cetak via browser, belum pada cetak cepat ESC/POS.</p>
       <div id="printer-status" class="flex items-center justify-between bg-slate-50 rounded-xl p-3">
         ${renderPrinterStatus()}
       </div>
@@ -88,6 +98,7 @@ export async function renderSettings() {
 
   document.getElementById('btn-logout').addEventListener('click', confirmLogout);
   wirePrinterButtons();
+  if (canEdit) wireLogoButtons();
 
   if (canEdit) {
     document.getElementById('settings-form').addEventListener('submit', async (e) => {
@@ -110,6 +121,51 @@ export async function renderSettings() {
 
     loadUserList();
   }
+}
+
+function renderLogoPreview() {
+  const logo = state.settings.logo_base64;
+  return `
+    <div class="w-20 h-20 rounded-xl border border-dashed border-slate-300 flex items-center justify-center bg-slate-50 shrink-0 overflow-hidden">
+      ${logo ? `<img src="${logo}" class="w-full h-full object-contain" alt="Logo toko" />` : `<span class="text-xs text-slate-300 text-center px-1">Belum ada logo</span>`}
+    </div>
+    <div class="flex flex-col gap-2">
+      <label class="h-10 px-3 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold flex items-center justify-center cursor-pointer touch-target">
+        ${logo ? 'Ganti Logo' : 'Unggah Logo'}
+        <input id="input-logo-file" type="file" accept="image/*" class="hidden" />
+      </label>
+      ${logo ? `<button id="btn-remove-logo" class="h-9 px-3 rounded-lg bg-red-50 text-red-500 text-xs font-semibold touch-target">Hapus Logo</button>` : ''}
+    </div>
+  `;
+}
+
+function wireLogoButtons() {
+  const fileInput = document.getElementById('input-logo-file');
+  if (fileInput) fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return showToast('File harus berupa gambar', 'error');
+
+    try {
+      const dataUrl = await resizeImageToDataUrl(file, 300);
+      await withLoading(api.updateSettings({ logo_base64: dataUrl }), 'Gagal menyimpan logo');
+      state.settings.logo_base64 = dataUrl;
+      showToast('Logo struk disimpan', 'success');
+      document.getElementById('logo-preview-area').innerHTML = renderLogoPreview();
+      wireLogoButtons();
+    } catch (err) {
+      showToast('Gagal memproses gambar: ' + (err.message || err), 'error');
+    }
+  });
+
+  const removeBtn = document.getElementById('btn-remove-logo');
+  if (removeBtn) removeBtn.addEventListener('click', async () => {
+    await withLoading(api.updateSettings({ logo_base64: null }), 'Gagal menghapus logo');
+    state.settings.logo_base64 = null;
+    showToast('Logo struk dihapus', 'success');
+    document.getElementById('logo-preview-area').innerHTML = renderLogoPreview();
+    wireLogoButtons();
+  });
 }
 
 function renderPrinterStatus() {

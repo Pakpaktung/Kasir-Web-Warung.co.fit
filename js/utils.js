@@ -54,6 +54,33 @@ export function closeModal() {
   if (root) root.innerHTML = '';
 }
 
+// Mengubah file gambar (dari <input type="file">) menjadi Data URL base64,
+// sambil memperkecil ukurannya (mempertahankan rasio) supaya tidak menyimpan
+// gambar beresolusi besar ke database hanya untuk ditampilkan sebagai logo kecil di struk.
+export function resizeImageToDataUrl(file, maxDimension = 300) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxDimension || height > maxDimension) {
+        const scale = maxDimension / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      URL.revokeObjectURL(objectUrl);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error('Gagal memuat gambar')); };
+    img.src = objectUrl;
+  });
+}
+
 // Wrapper sederhana untuk memanggil fungsi async dan otomatis menampilkan
 // toast error yang mudah dibaca jika terjadi kegagalan (mis. RLS menolak, network error, dst).
 export async function withLoading(promise, errorMessagePrefix = 'Gagal') {
