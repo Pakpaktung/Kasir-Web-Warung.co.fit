@@ -183,6 +183,16 @@ export async function fetchTransactionById(id) {
   return data;
 }
 
+// Menghapus SATU transaksi beserta seluruh itemnya (cascade). Dibatasi lewat
+// RLS di database: hanya user dengan role admin yang bisa berhasil menghapus
+// (lihat policy "transactions_delete_admin" di sql/schema.sql) -- kalau kasir
+// biasa mencoba memanggil ini, Supabase akan menolak (baris tidak ditemukan/
+// tidak berubah) meski tombolnya entah bagaimana bisa terpanggil dari UI.
+export async function deleteTransaction(id) {
+  const { error } = await supabase.from('transactions').delete().eq('id', id);
+  if (error) throw error;
+}
+
 
 /* -------------------------------- LAPORAN --------------------------------- */
 

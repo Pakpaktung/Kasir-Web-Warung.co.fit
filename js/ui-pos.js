@@ -398,7 +398,7 @@ function openPaymentModal() {
           <p class="text-xs text-slate-400 mt-2">Minta pelanggan memindai kode di atas dan membayar tepat <b class="text-slate-600">${formatRupiah(totals.total)}</b>.</p>
         </div>
         <label class="flex items-center gap-2 text-sm text-slate-600 mb-1">
-          <input id="input-qris-confirmed" type="checkbox" class="w-2 h-2 rounded touch-target" />
+          <input id="input-qris-confirmed" type="checkbox" class="w-4 h-4 rounded touch-target" />
           Saya konfirmasi pembayaran QRIS sudah diterima
         </label>
       `;

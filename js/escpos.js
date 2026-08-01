@@ -22,7 +22,7 @@ const PRINTER_CHARACTERISTIC_UUID = '00002af1-0000-1000-8000-00805f9b34fb';
 // ============================================================================
 // Lebar logo = LOGO_WIDTH_RATIO x lebar kertas. 1.0 = selebar kertas (penuh),
 // 0.5 = separuh lebar kertas, dst. Perkecil nilainya kalau logo masih terlalu besar.
-const LOGO_WIDTH_RATIO = 0.35;
+const LOGO_WIDTH_RATIO = 0.45;
 
 // Ukuran teks nama toko: 1 = normal, 2 = 2x lipat, 3 = 3x lipat, dst (maks. 8).
 // STORE_NAME_WIDTH_MULT mengatur lebar, STORE_NAME_HEIGHT_MULT mengatur tinggi.

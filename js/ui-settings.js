@@ -46,7 +46,7 @@ export async function renderSettings() {
     <!-- ============ PRINTER THERMAL ============ -->
     <div class="bg-white rounded-2xl border border-slate-200 p-5 max-w-lg mb-4">
       <h3 class="font-bold text-slate-800 mb-1 text-sm">🖨️ Printer Thermal (ESC/POS)</h3>
-      <p class="text-xs text-slate-400 mb-3">Hubungkan printer Bluetooth untuk cetak cepat tanpa dialog print browser. Hanya didukung di Chrome/Edge (Desktop & Android). Catatan: logo struk saat ini hanya tampil pada cetak via browser, belum pada cetak cepat ESC/POS.</p>
+      <p class="text-xs text-slate-400 mb-3">Hubungkan printer Bluetooth untuk cetak cepat tanpa dialog print browser. Hanya didukung di Chrome/Edge (Desktop & Android). Logo struk (jika diunggah) ikut tercetak dalam mode bitmap hitam-putih; untuk hasil terbaik gunakan logo dengan kontras tinggi/garis tegas.</p>
       <div id="printer-status" class="flex items-center justify-between bg-slate-50 rounded-xl p-3">
         ${renderPrinterStatus()}
       </div>

@@ -113,7 +113,8 @@ create index if not exists idx_shifts_cashier on shifts(cashier_id);
 -- ============================================================================
 create table if not exists transactions (
   id uuid primary key default gen_random_uuid(),
-  code text not null unique,
+  trx_number bigint, -- nomor urut transaksi (urutan ke berapa sejak toko ini dibuat), diisi via sequence di RPC create_transaction
+  code text not null unique, -- kode tampilan, format "TRX-000001" dibentuk dari trx_number (lihat RPC create_transaction)
   cashier_id uuid not null references profiles(id),
   shift_id uuid references shifts(id),
   customer_name text, -- nama pelanggan (opsional), ditampilkan di struk
@@ -140,11 +141,41 @@ create table if not exists transaction_items (
   qty integer not null check (qty > 0)
 );
 
+-- Sequence untuk penomoran urut transaksi (dimulai dari 1, naik terus, tidak
+-- pernah diulang -- ini adalah cara yang aman-dari-race-condition untuk memberi
+-- nomor urut, jauh lebih aman daripada menghitung count(*) manual saat checkout
+-- yang bisa "tabrakan" kalau 2 kasir checkout bersamaan).
+create sequence if not exists transactions_trx_number_seq;
+
 -- Migrasi aman untuk database yang sudah pernah dibuat sebelum kolom-kolom ini ditambahkan
 alter table transactions add column if not exists total_cost numeric(12,2) not null default 0;
 alter table transactions add column if not exists customer_name text;
 alter table transactions add column if not exists payment_method text not null default 'cash';
+alter table transactions add column if not exists trx_number bigint;
 alter table transaction_items add column if not exists cost_price numeric(12,2) not null default 0;
+
+-- Isi nomor urut untuk transaksi LAMA yang belum punya trx_number (diurutkan
+-- berdasarkan waktu transaksi dibuat), lalu majukan sequence supaya transaksi
+-- BARU melanjutkan dari nomor terakhir tanpa tabrakan.
+do $$
+begin
+  update transactions t
+    set trx_number = sub.rn
+    from (
+      select id, row_number() over (order by created_at, id) as rn
+      from transactions
+      where trx_number is null
+    ) sub
+    where t.id = sub.id;
+
+  perform setval('transactions_trx_number_seq', coalesce((select max(trx_number) from transactions), 0));
+end $$;
+
+do $$
+begin
+  alter table transactions add constraint transactions_trx_number_key unique (trx_number);
+exception when duplicate_object then null;
+end $$;
 
 do $$
 begin
@@ -203,7 +234,8 @@ declare
   v_tax_amount numeric(12,2);
   v_total numeric(12,2);
   v_trx_id uuid := gen_random_uuid();
-  v_trx_code text := 'TRX-' || to_char(now(), 'YYMMDDHH24MISS');
+  v_trx_number bigint;  -- diisi belakangan, SETELAH semua validasi lolos (lihat catatan di bawah)
+  v_trx_code text;
 begin
   if v_cashier_id is null then
     raise exception 'Unauthorized: harus login untuk membuat transaksi';
@@ -248,11 +280,21 @@ begin
     raise exception 'Nominal bayar (%) kurang dari total (%)', p_paid, v_total;
   end if;
 
+  -- Ambil nomor urut di sini, SETELAH semua validasi di atas lolos (bukan di
+  -- bagian "declare" di awal function). Sequence Postgres tidak ikut rollback
+  -- kalau transaksi gagal/dibatalkan -- kalau nextval() dipanggil terlalu awal,
+  -- percobaan checkout yang gagal (mis. stok kurang) tetap "membakar" satu
+  -- nomor urut dan membuat nomor jadi bolong (mis. TRX-000001 lompat ke
+  -- TRX-000003). Dengan memanggilnya di sini, nomor urut hanya naik untuk
+  -- transaksi yang benar-benar berhasil tersimpan.
+  v_trx_number := nextval('transactions_trx_number_seq');
+  v_trx_code := 'TRX-' || lpad(v_trx_number::text, 6, '0');
+
   insert into transactions (
-    id, code, cashier_id, shift_id, customer_name, payment_method, subtotal, total_cost, discount_percent, discount_amount,
+    id, trx_number, code, cashier_id, shift_id, customer_name, payment_method, subtotal, total_cost, discount_percent, discount_amount,
     tax_percent, tax_amount, total, paid, change
   ) values (
-    v_trx_id, v_trx_code, v_cashier_id, p_shift_id, nullif(trim(p_customer_name), ''), p_payment_method, v_subtotal, v_total_cost, v_discount_percent,
+    v_trx_id, v_trx_number, v_trx_code, v_cashier_id, p_shift_id, nullif(trim(p_customer_name), ''), p_payment_method, v_subtotal, v_total_cost, v_discount_percent,
     v_discount_amount, v_settings.tax_percent, v_tax_amount, v_total, p_paid, p_paid - v_total
   );
 
@@ -267,7 +309,7 @@ begin
       where id = v_product.id;
   end loop;
 
-  return jsonb_build_object('id', v_trx_id, 'code', v_trx_code, 'total', v_total, 'change', p_paid - v_total);
+  return jsonb_build_object('id', v_trx_id, 'code', v_trx_code, 'trx_number', v_trx_number, 'total', v_total, 'change', p_paid - v_total);
 end;
 $$;
 
@@ -335,6 +377,15 @@ create policy "transaction_items_select_via_trx" on transaction_items for select
 -- Catatan: TIDAK ada policy INSERT untuk transactions/transaction_items secara langsung.
 -- Function create_transaction() memakai `security definer` sehingga tetap bisa insert
 -- meski client tidak diberi izin insert langsung -- ini mencegah client memalsukan transaksi.
+
+-- HAPUS RIWAYAT TRANSAKSI: khusus admin. transaction_items ikut terhapus otomatis
+-- lewat "on delete cascade" di foreign key-nya saat baris transactions dihapus.
+-- Policy delete pada transaction_items tetap dibuat eksplisit sebagai lapisan
+-- pengaman tambahan (berjaga-jaga terhadap perubahan perilaku RLS pada cascade).
+drop policy if exists "transactions_delete_admin" on transactions;
+create policy "transactions_delete_admin" on transactions for delete to authenticated using (is_admin());
+drop policy if exists "transaction_items_delete_admin" on transaction_items;
+create policy "transaction_items_delete_admin" on transaction_items for delete to authenticated using (is_admin());
 
 
 -- ============================================================================
