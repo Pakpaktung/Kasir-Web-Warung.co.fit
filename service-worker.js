@@ -12,12 +12,13 @@
 // untuk file statis, bukan untuk data.
 // ============================================================================
 
-const CACHE_VERSION = 'kasir-pos-v1';
+const CACHE_VERSION = 'kasir-pos-v2'; // dinaikkan agar cache lama (versi bermasalah) dibuang paksa di semua perangkat
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.json',
   './js/main.js',
+  './js/pwa.js',
   './js/supabase-client.js',
   './js/api.js',
   './js/auth.js',
@@ -62,30 +63,38 @@ self.addEventListener('fetch', (event) => {
   // Hanya proses request GET; POST/PUT/dll (jarang terjadi di luar Supabase) dilewatkan.
   if (request.method !== 'GET') return;
 
-  // 2) Navigasi halaman (buka/refresh app): coba network dulu, fallback ke cache
-  //    kalau offline, supaya app-shell tetap bisa terbuka tanpa internet.
-  if (request.mode === 'navigate') {
+  // 2) HTML & aset milik aplikasi sendiri (navigasi, JS, manifest, ikon): NETWORK-FIRST.
+  //    ----------------------------------------------------------------------------
+  //    Sebelumnya bagian ini pakai "cache-first" (langsung pakai cache tanpa cek
+  //    jaringan) untuk file JS/aset -- efeknya, begitu sebuah perangkat pernah
+  //    membuka aplikasi sekali, ia bisa "terjebak" di versi kode yang sudah usang
+  //    untuk waktu lama, walau server sudah punya update, sampai CACHE_VERSION di
+  //    atas dinaikkan manual. Ini pernah menyebabkan tablet menampilkan fitur lama
+  //    padahal laptop (yang cache-nya belum sempat tersimpan) sudah menampilkan versi baru.
+  //
+  //    Sekarang: SELALU coba ambil dari jaringan dulu (supaya update kode terbaru
+  //    langsung kepakai kapan pun perangkat online), cache HANYA dipakai sebagai
+  //    cadangan darurat kalau benar-benar offline. Aplikasi ini tetap butuh koneksi
+  //    internet untuk Supabase, jadi tidak ada kerugian berarti dari sisi "kecepatan
+  //    offline" dibanding risiko menampilkan kode usang tanpa disadari.
+  if (request.mode === 'navigate' || url.origin === self.location.origin) {
     event.respondWith(
-      fetch(request).catch(() => caches.match('./index.html'))
+      fetch(request)
+        .then((res) => {
+          const resClone = res.clone();
+          caches.open(CACHE_VERSION).then((cache) => cache.put(request, resClone));
+          return res;
+        })
+        .catch(() => caches.match(request).then((cached) => cached || caches.match('./index.html')))
     );
     return;
   }
 
-  // 3) Aset statis milik aplikasi sendiri (same-origin): cache-first.
-  if (url.origin === self.location.origin) {
-    event.respondWith(
-      caches.match(request).then((cached) => cached || fetch(request).then((res) => {
-        const resClone = res.clone();
-        caches.open(CACHE_VERSION).then((cache) => cache.put(request, resClone));
-        return res;
-      }))
-    );
-    return;
-  }
-
-  // 4) Aset CDN pihak ketiga (Tailwind, Chart.js, Google Fonts): stale-while-revalidate
+  // 3) Aset CDN pihak ketiga (Tailwind, Chart.js, Google Fonts): stale-while-revalidate
   //    - langsung tampilkan versi cache (kalau ada) biar cepat, sambil diam-diam
-  //      mengambil versi terbaru di background untuk kunjungan berikutnya.
+  //      mengambil versi terbaru di background untuk kunjungan berikutnya. Ini masih
+  //      aman dipakai di sini karena file-file CDN ini (bukan kode aplikasi sendiri)
+  //      jarang berubah dan biasanya sudah punya versi di URL-nya.
   event.respondWith(
     caches.open(CACHE_VERSION).then(async (cache) => {
       const cached = await cache.match(request);
