@@ -82,6 +82,7 @@ create table if not exists store_settings (
   receipt_width text not null default '80mm' check (receipt_width in ('58mm','80mm')),
   logo_base64 text, -- logo struk dalam format Data URL base64 (mis. "data:image/png;base64,...."), NULL = tanpa logo
   qris_image_base64 text, -- gambar kode QRIS statis toko (Data URL base64), ditampilkan di layar pembayaran saat metode QRIS dipilih
+  timezone text not null default 'Asia/Jakarta', -- zona waktu toko (WIB/WITA/WIT), dipakai untuk menentukan kapan "hari baru" dimulai (reset nomor urut transaksi)
   constraint single_row check (id = 1)
 );
 insert into store_settings (id) values (1) on conflict (id) do nothing;
@@ -89,6 +90,7 @@ insert into store_settings (id) values (1) on conflict (id) do nothing;
 -- Migrasi aman untuk database yang sudah pernah menjalankan versi skema sebelumnya
 alter table store_settings add column if not exists logo_base64 text;
 alter table store_settings add column if not exists qris_image_base64 text;
+alter table store_settings add column if not exists timezone text not null default 'Asia/Jakarta';
 
 
 -- ============================================================================
@@ -113,8 +115,9 @@ create index if not exists idx_shifts_cashier on shifts(cashier_id);
 -- ============================================================================
 create table if not exists transactions (
   id uuid primary key default gen_random_uuid(),
-  trx_number bigint, -- nomor urut transaksi (urutan ke berapa sejak toko ini dibuat), diisi via sequence di RPC create_transaction
-  code text not null unique, -- kode tampilan, format "TRX-000001" dibentuk dari trx_number (lihat RPC create_transaction)
+  trx_date date, -- tanggal lokal toko (sesuai store_settings.timezone) saat transaksi dibuat -- dasar reset nomor urut harian
+  trx_number bigint, -- nomor urut transaksi PADA HARI ITU (reset ke 1 setiap tanggal berganti), diisi via daily_transaction_counters di RPC create_transaction
+  code text not null unique, -- kode tampilan, format "TRX-YYMMDD-0001" dibentuk dari trx_date + trx_number (lihat RPC create_transaction)
   cashier_id uuid not null references profiles(id),
   shift_id uuid references shifts(id),
   customer_name text, -- nama pelanggan (opsional), ditampilkan di struk
@@ -141,39 +144,74 @@ create table if not exists transaction_items (
   qty integer not null check (qty > 0)
 );
 
--- Sequence untuk penomoran urut transaksi (dimulai dari 1, naik terus, tidak
--- pernah diulang -- ini adalah cara yang aman-dari-race-condition untuk memberi
--- nomor urut, jauh lebih aman daripada menghitung count(*) manual saat checkout
--- yang bisa "tabrakan" kalau 2 kasir checkout bersamaan).
-create sequence if not exists transactions_trx_number_seq;
+-- Tabel penghitung nomor urut PER TANGGAL. Satu baris per hari, `last_number`
+-- naik terus sepanjang hari itu lalu otomatis "mulai baris baru" (mulai dari 0
+-- lagi) begitu tanggalnya berganti -- ini yang membuat nomor urut reset setiap
+-- hari. Diupdate secara atomik lewat INSERT ... ON CONFLICT DO UPDATE di RPC
+-- create_transaction, aman dari race condition walau 2 kasir checkout bersamaan.
+create table if not exists daily_transaction_counters (
+  trx_date date primary key,
+  last_number integer not null default 0
+);
+alter table daily_transaction_counters enable row level security;
+-- Sengaja TIDAK ada policy select/insert/update untuk role authenticated --
+-- tabel ini hanya boleh disentuh lewat function create_transaction (security
+-- definer), bukan langsung dari client.
+
+-- Sequence lama (skema versi sebelumnya, penomoran global naik terus tanpa
+-- reset) sudah tidak dipakai lagi, digantikan tabel daily_transaction_counters
+-- di atas. Dihapus supaya tidak jadi objek "mati" yang membingungkan.
+drop sequence if exists transactions_trx_number_seq;
 
 -- Migrasi aman untuk database yang sudah pernah dibuat sebelum kolom-kolom ini ditambahkan
 alter table transactions add column if not exists total_cost numeric(12,2) not null default 0;
 alter table transactions add column if not exists customer_name text;
 alter table transactions add column if not exists payment_method text not null default 'cash';
 alter table transactions add column if not exists trx_number bigint;
+alter table transactions add column if not exists trx_date date;
 alter table transaction_items add column if not exists cost_price numeric(12,2) not null default 0;
 
--- Isi nomor urut untuk transaksi LAMA yang belum punya trx_number (diurutkan
--- berdasarkan waktu transaksi dibuat), lalu majukan sequence supaya transaksi
--- BARU melanjutkan dari nomor terakhir tanpa tabrakan.
+-- Constraint unik LAMA (trx_number sendirian, dari skema sebelum ada reset
+-- harian) dilepas -- sekarang trx_number BOLEH berulang antar tanggal
+-- berbeda (mis. "#1" muncul lagi setiap hari), yang unik adalah kombinasi
+-- (trx_date, trx_number).
+alter table transactions drop constraint if exists transactions_trx_number_key;
+
+-- Hitung ULANG trx_date & trx_number untuk SEMUA transaksi (bukan cuma yang
+-- kosong) berdasarkan zona waktu toko saat ini di store_settings.timezone,
+-- lalu bentuk ulang `code` supaya formatnya konsisten "TRX-YYMMDD-0001".
+-- Aman dijalankan berkali-kali -- setiap dijalankan ulang, hasilnya dihitung
+-- ulang dari created_at (bukan hanya mengisi yang NULL), jadi kalau Anda
+-- ganti zona waktu toko di kemudian hari lalu jalankan ulang script ini,
+-- penomoran & tanggalnya ikut menyesuaikan.
 do $$
+declare
+  v_tz text;
 begin
+  select coalesce(timezone, 'Asia/Jakarta') into v_tz from store_settings where id = 1;
+
   update transactions t
-    set trx_number = sub.rn
+    set trx_date = sub.d,
+        trx_number = sub.rn,
+        code = 'TRX-' || to_char(sub.d, 'YYMMDD') || '-' || lpad(sub.rn::text, 4, '0')
     from (
-      select id, row_number() over (order by created_at, id) as rn
+      select id,
+        (created_at at time zone v_tz)::date as d,
+        row_number() over (partition by (created_at at time zone v_tz)::date order by created_at, id) as rn
       from transactions
-      where trx_number is null
     ) sub
     where t.id = sub.id;
 
-  perform setval('transactions_trx_number_seq', coalesce((select max(trx_number) from transactions), 0));
+  -- Samakan penghitung harian dengan nomor tertinggi hasil migrasi di atas,
+  -- supaya transaksi BARU melanjutkan dari situ (bukan mulai dari 1 lagi).
+  insert into daily_transaction_counters (trx_date, last_number)
+    select trx_date, max(trx_number) from transactions where trx_date is not null group by trx_date
+  on conflict (trx_date) do update set last_number = excluded.last_number;
 end $$;
 
 do $$
 begin
-  alter table transactions add constraint transactions_trx_number_key unique (trx_number);
+  alter table transactions add constraint transactions_trx_date_number_key unique (trx_date, trx_number);
 exception when duplicate_object then null;
 end $$;
 
@@ -234,6 +272,7 @@ declare
   v_tax_amount numeric(12,2);
   v_total numeric(12,2);
   v_trx_id uuid := gen_random_uuid();
+  v_today date;
   v_trx_number bigint;  -- diisi belakangan, SETELAH semua validasi lolos (lihat catatan di bawah)
   v_trx_code text;
 begin
@@ -281,20 +320,28 @@ begin
   end if;
 
   -- Ambil nomor urut di sini, SETELAH semua validasi di atas lolos (bukan di
-  -- bagian "declare" di awal function). Sequence Postgres tidak ikut rollback
-  -- kalau transaksi gagal/dibatalkan -- kalau nextval() dipanggil terlalu awal,
-  -- percobaan checkout yang gagal (mis. stok kurang) tetap "membakar" satu
-  -- nomor urut dan membuat nomor jadi bolong (mis. TRX-000001 lompat ke
-  -- TRX-000003). Dengan memanggilnya di sini, nomor urut hanya naik untuk
-  -- transaksi yang benar-benar berhasil tersimpan.
-  v_trx_number := nextval('transactions_trx_number_seq');
-  v_trx_code := 'TRX-' || lpad(v_trx_number::text, 6, '0');
+  -- bagian "declare" di awal function), supaya percobaan checkout yang gagal
+  -- (mis. stok kurang) tidak ikut "membakar" satu nomor dan membuat urutan bolong.
+  --
+  -- Nomor urut RESET SETIAP HARI: `v_today` dihitung dari tanggal lokal toko
+  -- (sesuai store_settings.timezone, bukan UTC server) supaya pergantian hari
+  -- terjadi pas jam 00:00 waktu toko, bukan jam 00:00 UTC. `INSERT ... ON
+  -- CONFLICT DO UPDATE` di bawah ini atomik -- aman dipakai bersamaan oleh
+  -- beberapa kasir tanpa risiko dua transaksi mendapat nomor yang sama.
+  v_today := (now() at time zone coalesce(v_settings.timezone, 'Asia/Jakarta'))::date;
+
+  insert into daily_transaction_counters (trx_date, last_number)
+  values (v_today, 1)
+  on conflict (trx_date) do update set last_number = daily_transaction_counters.last_number + 1
+  returning last_number into v_trx_number;
+
+  v_trx_code := 'TRX-' || to_char(v_today, 'YYMMDD') || '-' || lpad(v_trx_number::text, 4, '0');
 
   insert into transactions (
-    id, trx_number, code, cashier_id, shift_id, customer_name, payment_method, subtotal, total_cost, discount_percent, discount_amount,
+    id, trx_date, trx_number, code, cashier_id, shift_id, customer_name, payment_method, subtotal, total_cost, discount_percent, discount_amount,
     tax_percent, tax_amount, total, paid, change
   ) values (
-    v_trx_id, v_trx_number, v_trx_code, v_cashier_id, p_shift_id, nullif(trim(p_customer_name), ''), p_payment_method, v_subtotal, v_total_cost, v_discount_percent,
+    v_trx_id, v_today, v_trx_number, v_trx_code, v_cashier_id, p_shift_id, nullif(trim(p_customer_name), ''), p_payment_method, v_subtotal, v_total_cost, v_discount_percent,
     v_discount_amount, v_settings.tax_percent, v_tax_amount, v_total, p_paid, p_paid - v_total
   );
 
@@ -309,7 +356,7 @@ begin
       where id = v_product.id;
   end loop;
 
-  return jsonb_build_object('id', v_trx_id, 'code', v_trx_code, 'trx_number', v_trx_number, 'total', v_total, 'change', p_paid - v_total);
+  return jsonb_build_object('id', v_trx_id, 'code', v_trx_code, 'trx_date', v_today, 'trx_number', v_trx_number, 'total', v_total, 'change', p_paid - v_total);
 end;
 $$;
 

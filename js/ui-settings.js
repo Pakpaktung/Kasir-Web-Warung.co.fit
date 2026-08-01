@@ -90,6 +90,15 @@ export async function renderSettings() {
         </select>
       </div>
       <div>
+        <label class="text-sm font-medium text-slate-600">Zona Waktu Toko</label>
+        <select name="timezone" class="w-full h-11 mt-1 px-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 touch-target">
+          <option value="Asia/Jakarta" ${s.timezone === 'Asia/Jakarta' ? 'selected' : ''}>WIB - Jakarta, Sumatera, Jawa, Kalimantan Barat/Tengah</option>
+          <option value="Asia/Makassar" ${s.timezone === 'Asia/Makassar' ? 'selected' : ''}>WITA - Bali, NTB, NTT, Kalimantan Selatan/Timur/Utara, Sulawesi</option>
+          <option value="Asia/Jayapura" ${s.timezone === 'Asia/Jayapura' ? 'selected' : ''}>WIT - Maluku, Papua</option>
+        </select>
+        <p class="text-xs text-slate-400 mt-1">Menentukan kapan "hari baru" dimulai untuk reset nomor urut transaksi (mis. TRX-260801-0001 kembali ke 0001 keesokan harinya).</p>
+      </div>
+      <div>
         <label class="text-sm font-medium text-slate-600">Catatan Kaki Struk</label>
         <textarea name="footer_note" rows="2" class="w-full mt-1 px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500">${escapeHtml(s.footer_note || '')}</textarea>
       </div>
@@ -120,6 +129,7 @@ export async function renderSettings() {
         tax_percent: Number(fd.get('tax_percent')) || 0,
         discount_percent: Number(fd.get('discount_percent')) || 0,
         receipt_width: fd.get('receipt_width'),
+        timezone: fd.get('timezone'),
       };
       await withLoading(api.updateSettings(payload), 'Gagal menyimpan pengaturan');
       state.settings = { ...state.settings, ...payload };

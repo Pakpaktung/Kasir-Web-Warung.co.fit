@@ -20,6 +20,7 @@ export const state = {
     receipt_width: '80mm',
     logo_base64: null,
     qris_image_base64: null,
+    timezone: 'Asia/Jakarta',
   },
 
   // --- UI ---
