@@ -22,14 +22,14 @@ const PRINTER_CHARACTERISTIC_UUID = '00002af1-0000-1000-8000-00805f9b34fb';
 // ============================================================================
 // Lebar logo = LOGO_WIDTH_RATIO x lebar kertas. 1.0 = selebar kertas (penuh),
 // 0.5 = separuh lebar kertas, dst. Perkecil nilainya kalau logo masih terlalu besar.
-const LOGO_WIDTH_RATIO = 0.45;
+const LOGO_WIDTH_RATIO = 0.35;
 
 // Ukuran teks nama toko: 1 = normal, 2 = 2x lipat, 3 = 3x lipat, dst (maks. 8).
 // STORE_NAME_WIDTH_MULT mengatur lebar, STORE_NAME_HEIGHT_MULT mengatur tinggi.
 // Contoh: {width:1, height:1} = ukuran normal (hanya tebal/bold).
 //         {width:1, height:2} = tinggi 2x tapi lebar tetap normal (ramping).
 //         {width:2, height:2} = 2x lipat di kedua sisi (besar, tampilan lama).
-const STORE_NAME_WIDTH_MULT = 1;
+const STORE_NAME_WIDTH_MULT = 2;
 const STORE_NAME_HEIGHT_MULT = 1;
 
 let printerDevice = null;
