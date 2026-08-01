@@ -142,15 +142,17 @@ export async function closeShift(shiftId, endingCash, notes) {
 
 // Checkout: memanggil RPC function `create_transaction` di database (lihat sql/schema.sql).
 // Harga, HPP, & validasi stok dihitung di server, bukan dipercaya dari input client.
-// `discountAmount` opsional (Rp) - diisi kalau kasir memasukkan diskon manual di
-// layar pembayaran; kalau tidak dikirim (undefined/null), server memakai
-// discount_percent default dari store_settings seperti sebelumnya.
-export async function checkout(items, paid, shiftId, discountAmount = null) {
+// `discountAmount` opsional (Rp) - diisi kalau kasir memasukkan diskon manual.
+// `customerName` opsional, murni untuk dicetak di struk.
+// `paymentMethod` 'cash' (default) atau 'qris'.
+export async function checkout(items, paid, shiftId, discountAmount = null, customerName = null, paymentMethod = 'cash') {
   const { data, error } = await supabase.rpc('create_transaction', {
     p_items: items.map(i => ({ product_id: i.productId, qty: i.qty })),
     p_paid: paid,
     p_shift_id: shiftId || null,
     p_discount_amount: discountAmount,
+    p_customer_name: customerName || null,
+    p_payment_method: paymentMethod,
   });
   if (error) throw error;
   return data; // { id, code, total, change }

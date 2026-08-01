@@ -307,14 +307,18 @@ function refreshCartUI() {
 /* -------------------------------- PEMBAYARAN -------------------------------- */
 
 function openPaymentModal() {
-  // State diskon LOKAL untuk modal ini saja: default mengikuti pengaturan toko,
-  // tapi kasir bisa mengubahnya (persen atau nominal Rp) sebelum konfirmasi bayar.
+  // State diskon & metode bayar LOKAL untuk modal ini saja.
   let discountState = { type: 'percent', value: state.settings.discount_percent || 0 };
+  let paymentMethod = 'cash'; // 'cash' | 'qris'
   let totals = computeCartTotals(discountState);
 
   openModal(`
     <div class="p-5">
       <h3 class="text-lg font-bold text-slate-800 mb-4">Pembayaran</h3>
+
+      <label class="text-sm font-medium text-slate-600">Nama Pelanggan (opsional)</label>
+      <input id="input-customer-name" type="text" placeholder="cth: Budi"
+        class="w-full h-11 mt-1 mb-4 px-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 touch-target" />
 
       <!-- ============ PANEL DISKON (bisa diubah manual per-transaksi) ============ -->
       <div class="bg-slate-50 rounded-xl p-3 mb-4">
@@ -336,27 +340,75 @@ function openPaymentModal() {
         <div class="flex justify-between text-lg font-extrabold text-brand-700 pt-1 border-t border-dashed border-slate-200"><span>Total</span><span id="sum-total" class="font-mono-num">${formatRupiah(totals.total)}</span></div>
       </div>
 
-      <label class="text-sm font-medium text-slate-600">Uang Dibayar</label>
-      <input id="input-paid" type="number" inputmode="numeric" placeholder="0"
-        class="w-full h-14 mt-1 mb-2 px-4 rounded-xl border border-slate-200 text-2xl font-bold font-mono-num focus:outline-none focus:ring-2 focus:ring-brand-500 touch-target" />
-      <div id="quick-pay-buttons" class="grid grid-cols-4 gap-2 mb-4"></div>
-      <div class="flex justify-between items-center bg-emerald-50 rounded-xl p-4 mb-5">
-        <span class="text-sm font-medium text-emerald-700">Kembalian</span>
-        <span id="change-display" class="text-xl font-bold text-emerald-700 font-mono-num">Rp0</span>
+      <!-- ============ METODE PEMBAYARAN ============ -->
+      <label class="text-sm font-medium text-slate-600 block mb-2">Metode Pembayaran</label>
+      <div class="grid grid-cols-2 gap-2 mb-4">
+        <button type="button" id="btn-method-cash" class="payment-method-btn h-11 rounded-xl border font-semibold text-sm touch-target">💵 Tunai</button>
+        <button type="button" id="btn-method-qris" class="payment-method-btn h-11 rounded-xl border font-semibold text-sm touch-target">📱 QRIS</button>
       </div>
-      <div class="flex gap-2">
+
+      <div id="payment-method-detail"></div>
+
+      <div class="flex gap-2 mt-5">
         <button id="btn-cancel-pay" class="flex-1 h-12 rounded-xl border border-slate-200 font-semibold text-slate-600 touch-target">Batal</button>
         <button id="btn-confirm-pay" class="flex-1 h-12 rounded-xl bg-brand-600 hover:bg-brand-700 text-white font-bold touch-target" disabled>Konfirmasi & Cetak</button>
       </div>
     </div>
   `, { size: 'sm' });
 
-  const input = document.getElementById('input-paid');
-  const changeDisplay = document.getElementById('change-display');
   const confirmBtn = document.getElementById('btn-confirm-pay');
   const discountValueInput = document.getElementById('input-discount-value');
   const btnDiscountPercent = document.getElementById('btn-discount-percent');
   const btnDiscountAmount = document.getElementById('btn-discount-amount');
+  const btnMethodCash = document.getElementById('btn-method-cash');
+  const btnMethodQris = document.getElementById('btn-method-qris');
+  const detailContainer = document.getElementById('payment-method-detail');
+
+  // Referensi elemen di dalam #payment-method-detail didapat ULANG setiap kali
+  // renderPaymentDetail() dipanggil, karena innerHTML-nya diganti total saat metode berubah.
+  let input, changeDisplay, qrisConfirmCheckbox;
+
+  function renderPaymentDetail() {
+    if (paymentMethod === 'cash') {
+      detailContainer.innerHTML = `
+        <label class="text-sm font-medium text-slate-600">Uang Dibayar</label>
+        <input id="input-paid" type="number" inputmode="numeric" placeholder="0"
+          class="w-full h-14 mt-1 mb-2 px-4 rounded-xl border border-slate-200 text-2xl font-bold font-mono-num focus:outline-none focus:ring-2 focus:ring-brand-500 touch-target" />
+        <div id="quick-pay-buttons" class="grid grid-cols-4 gap-2 mb-4"></div>
+        <div class="flex justify-between items-center bg-emerald-50 rounded-xl p-4">
+          <span class="text-sm font-medium text-emerald-700">Kembalian</span>
+          <span id="change-display" class="text-xl font-bold text-emerald-700 font-mono-num">Rp0</span>
+        </div>
+      `;
+      input = document.getElementById('input-paid');
+      changeDisplay = document.getElementById('change-display');
+      renderQuickPayButtons();
+      input.addEventListener('input', updateChange);
+      updateChange();
+      input.focus();
+    } else {
+      // QRIS: tidak ada input nominal manual - nominal yang dibayar customer
+      // diasumsikan PAS sama dengan total (dibayar via scan QR), kembalian = 0.
+      const qris = state.settings.qris_image_base64;
+      detailContainer.innerHTML = `
+        <div class="bg-slate-50 rounded-xl p-4 text-center mb-3">
+          ${qris
+            ? `<img src="${qris}" alt="Kode QRIS" class="mx-auto rounded-lg" style="max-width:220px" />`
+            : `<p class="text-xs text-amber-600 py-6">Kode QRIS toko belum diunggah. Tambahkan lewat Pengaturan &rarr; QRIS, atau tunjukkan kode QRIS fisik/aplikasi e-wallet secara manual ke pelanggan.</p>`}
+          <p class="text-xs text-slate-400 mt-2">Minta pelanggan memindai kode di atas dan membayar tepat <b class="text-slate-600">${formatRupiah(totals.total)}</b>.</p>
+        </div>
+        <label class="flex items-center gap-2 text-sm text-slate-600 mb-1">
+          <input id="input-qris-confirmed" type="checkbox" class="w-4 h-4 rounded touch-target" />
+          Saya konfirmasi pembayaran QRIS sudah diterima
+        </label>
+      `;
+      qrisConfirmCheckbox = document.getElementById('input-qris-confirmed');
+      qrisConfirmCheckbox.addEventListener('change', () => {
+        confirmBtn.disabled = !qrisConfirmCheckbox.checked;
+      });
+      confirmBtn.disabled = true;
+    }
+  }
 
   function renderQuickPayButtons() {
     document.getElementById('quick-pay-buttons').innerHTML = [totals.total, 20000, 50000, 100000].map(n => `
@@ -377,6 +429,15 @@ function openPaymentModal() {
     btnDiscountAmount.classList.add(...(discountState.type === 'amount' ? activeCls : inactiveCls));
   }
 
+  function updateMethodButtons() {
+    const activeCls = ['bg-brand-600', 'text-white', 'border-brand-600'];
+    const inactiveCls = ['bg-white', 'text-slate-500', 'border-slate-200'];
+    btnMethodCash.classList.remove(...activeCls, ...inactiveCls);
+    btnMethodQris.classList.remove(...activeCls, ...inactiveCls);
+    btnMethodCash.classList.add(...(paymentMethod === 'cash' ? activeCls : inactiveCls));
+    btnMethodQris.classList.add(...(paymentMethod === 'qris' ? activeCls : inactiveCls));
+  }
+
   function recalculate() {
     totals = computeCartTotals(discountState);
     document.getElementById('sum-subtotal').textContent = formatRupiah(totals.subtotal);
@@ -384,8 +445,7 @@ function openPaymentModal() {
     const taxEl = document.getElementById('sum-tax');
     if (taxEl) taxEl.textContent = formatRupiah(totals.taxAmount);
     document.getElementById('sum-total').textContent = formatRupiah(totals.total);
-    renderQuickPayButtons();
-    updateChange();
+    renderPaymentDetail(); // render ulang detail metode bayar (nominal "Pas" & total QRIS ikut berubah)
   }
 
   function updateChange() {
@@ -397,38 +457,32 @@ function openPaymentModal() {
     confirmBtn.disabled = paid < totals.total;
   }
 
-  btnDiscountPercent.addEventListener('click', () => {
-    discountState.type = 'percent';
-    updateDiscountTypeButtons();
-    recalculate();
-  });
-  btnDiscountAmount.addEventListener('click', () => {
-    discountState.type = 'amount';
-    updateDiscountTypeButtons();
-    recalculate();
-  });
-  discountValueInput.addEventListener('input', () => {
-    discountState.value = Number(discountValueInput.value) || 0;
-    recalculate();
-  });
+  btnDiscountPercent.addEventListener('click', () => { discountState.type = 'percent'; updateDiscountTypeButtons(); recalculate(); });
+  btnDiscountAmount.addEventListener('click', () => { discountState.type = 'amount'; updateDiscountTypeButtons(); recalculate(); });
+  discountValueInput.addEventListener('input', () => { discountState.value = Number(discountValueInput.value) || 0; recalculate(); });
+
+  btnMethodCash.addEventListener('click', () => { paymentMethod = 'cash'; updateMethodButtons(); renderPaymentDetail(); });
+  btnMethodQris.addEventListener('click', () => { paymentMethod = 'qris'; updateMethodButtons(); renderPaymentDetail(); });
 
   updateDiscountTypeButtons();
-  renderQuickPayButtons();
-  input.addEventListener('input', updateChange);
+  updateMethodButtons();
+  renderPaymentDetail();
 
   document.getElementById('btn-cancel-pay').addEventListener('click', closeModal);
   confirmBtn.addEventListener('click', async () => {
-    const paid = Number(input.value) || 0;
+    // Tunai: nominal dari input kasir. QRIS: dianggap dibayar pas sesuai total (checkbox konfirmasi sudah dicentang).
+    const paid = paymentMethod === 'cash' ? (Number(input.value) || 0) : totals.total;
     if (paid < totals.total) return;
+
     confirmBtn.disabled = true;
     confirmBtn.textContent = 'Memproses...';
 
     try {
       // Checkout diproses di server (function create_transaction) supaya harga,
-      // HPP, & stok tervalidasi ulang di database. `totals.discountAmount` yang
-      // sudah dihitung di sini dikirim sebagai diskon manual final; server tetap
-      // membatasi nilainya ke rentang [0, subtotal] sebagai pengaman tambahan.
-      const result = await api.checkout(state.cart, paid, state.currentShift.id, totals.discountAmount);
+      // HPP, & stok tervalidasi ulang di database. Nama pelanggan & metode
+      // pembayaran murni untuk pencatatan/cetak struk, tidak memengaruhi kalkulasi harga.
+      const customerName = document.getElementById('input-customer-name').value.trim();
+      const result = await api.checkout(state.cart, paid, state.currentShift.id, totals.discountAmount, customerName, paymentMethod);
       state.cart = [];
       closeModal();
       showToast('Transaksi berhasil disimpan', 'success');
@@ -442,6 +496,4 @@ function openPaymentModal() {
       confirmBtn.textContent = 'Konfirmasi & Cetak';
     }
   });
-
-  input.focus();
 }

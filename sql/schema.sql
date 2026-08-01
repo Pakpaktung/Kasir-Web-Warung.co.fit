@@ -81,12 +81,14 @@ create table if not exists store_settings (
   discount_percent numeric(5,2) not null default 0,
   receipt_width text not null default '80mm' check (receipt_width in ('58mm','80mm')),
   logo_base64 text, -- logo struk dalam format Data URL base64 (mis. "data:image/png;base64,...."), NULL = tanpa logo
+  qris_image_base64 text, -- gambar kode QRIS statis toko (Data URL base64), ditampilkan di layar pembayaran saat metode QRIS dipilih
   constraint single_row check (id = 1)
 );
 insert into store_settings (id) values (1) on conflict (id) do nothing;
 
 -- Migrasi aman untuk database yang sudah pernah menjalankan versi skema sebelumnya
 alter table store_settings add column if not exists logo_base64 text;
+alter table store_settings add column if not exists qris_image_base64 text;
 
 
 -- ============================================================================
@@ -114,6 +116,8 @@ create table if not exists transactions (
   code text not null unique,
   cashier_id uuid not null references profiles(id),
   shift_id uuid references shifts(id),
+  customer_name text, -- nama pelanggan (opsional), ditampilkan di struk
+  payment_method text not null default 'cash' check (payment_method in ('cash', 'qris')),
   subtotal numeric(12,2) not null,
   total_cost numeric(12,2) not null default 0, -- total HPP (modal) transaksi ini, untuk laporan laba
   discount_percent numeric(5,2) not null default 0,
@@ -138,7 +142,15 @@ create table if not exists transaction_items (
 
 -- Migrasi aman untuk database yang sudah pernah dibuat sebelum kolom-kolom ini ditambahkan
 alter table transactions add column if not exists total_cost numeric(12,2) not null default 0;
+alter table transactions add column if not exists customer_name text;
+alter table transactions add column if not exists payment_method text not null default 'cash';
 alter table transaction_items add column if not exists cost_price numeric(12,2) not null default 0;
+
+do $$
+begin
+  alter table transactions add constraint transactions_payment_method_check check (payment_method in ('cash', 'qris'));
+exception when duplicate_object then null;
+end $$;
 
 create index if not exists idx_transactions_created_at on transactions(created_at desc);
 create index if not exists idx_transactions_cashier on transactions(cashier_id);
@@ -161,12 +173,19 @@ create index if not exists idx_transaction_items_trx on transaction_items(transa
 -- untuk MENIMPA diskon default tersebut. Server tetap membatasi nilainya agar
 -- tidak melebihi subtotal ataupun negatif, sehingga tidak bisa dimanipulasi
 -- jadi diskon > 100% dari DevTools.
+--
+-- `p_customer_name` opsional, murni untuk dicetak di struk (tidak divalidasi
+-- ketat). `p_payment_method` adalah 'cash' atau 'qris' -- ini juga hanya untuk
+-- pencatatan, aplikasi TIDAK melakukan verifikasi otomatis ke penyedia QRIS
+-- manapun (lihat catatan di README bagian pembayaran QRIS).
 -- ============================================================================
 create or replace function create_transaction(
   p_items jsonb,              -- format: [{"product_id": "...", "qty": 2}, ...]
   p_paid numeric,
   p_shift_id uuid default null,
-  p_discount_amount numeric default null  -- diskon manual (Rp), opsional; null = pakai discount_percent dari store_settings
+  p_discount_amount numeric default null,  -- diskon manual (Rp), opsional; null = pakai discount_percent dari store_settings
+  p_customer_name text default null,
+  p_payment_method text default 'cash'
 )
 returns jsonb
 language plpgsql
@@ -188,6 +207,10 @@ declare
 begin
   if v_cashier_id is null then
     raise exception 'Unauthorized: harus login untuk membuat transaksi';
+  end if;
+
+  if p_payment_method not in ('cash', 'qris') then
+    raise exception 'Metode pembayaran tidak dikenal: %', p_payment_method;
   end if;
 
   select * into v_settings from store_settings where id = 1;
@@ -226,10 +249,10 @@ begin
   end if;
 
   insert into transactions (
-    id, code, cashier_id, shift_id, subtotal, total_cost, discount_percent, discount_amount,
+    id, code, cashier_id, shift_id, customer_name, payment_method, subtotal, total_cost, discount_percent, discount_amount,
     tax_percent, tax_amount, total, paid, change
   ) values (
-    v_trx_id, v_trx_code, v_cashier_id, p_shift_id, v_subtotal, v_total_cost, v_discount_percent,
+    v_trx_id, v_trx_code, v_cashier_id, p_shift_id, nullif(trim(p_customer_name), ''), p_payment_method, v_subtotal, v_total_cost, v_discount_percent,
     v_discount_amount, v_settings.tax_percent, v_tax_amount, v_total, p_paid, p_paid - v_total
   );
 

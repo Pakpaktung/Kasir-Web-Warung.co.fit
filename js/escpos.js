@@ -106,6 +106,7 @@ export async function printReceiptESCPOS(transaction, settings) {
   b.line(`No: ${transaction.code}`);
   b.line(new Date(transaction.created_at).toLocaleString('id-ID'));
   b.line(`Kasir: ${transaction.profiles?.full_name || '-'}`);
+  if (transaction.customer_name) b.line(`Pelanggan: ${transaction.customer_name}`);
   b.divider(width);
 
   transaction.transaction_items.forEach(item => {
@@ -122,6 +123,7 @@ export async function printReceiptESCPOS(transaction, settings) {
   b.bold(false);
   b.twoCol('Bayar', transaction.paid.toLocaleString('id-ID'), width);
   b.twoCol('Kembali', transaction.change.toLocaleString('id-ID'), width);
+  b.twoCol('Metode', transaction.payment_method === 'qris' ? 'QRIS' : 'Tunai', width);
   b.divider(width);
 
   b.align('center').line(settings.footer_note || '');

@@ -69,6 +69,7 @@ export function buildReceiptInnerHTML(t) {
       <p>No: ${t.code}</p>
       <p>${formatTanggal(t.created_at)}</p>
       <p>Kasir: ${escapeHtml(cashierName)}</p>
+      ${t.customer_name ? `<p>Pelanggan: ${escapeHtml(t.customer_name)}</p>` : ''}
       <div class="border-t border-dashed border-slate-400 my-1"></div>
 
       ${t.transaction_items.map(item => `
@@ -90,6 +91,7 @@ export function buildReceiptInnerHTML(t) {
       </div>
       <div class="flex justify-between mt-1"><span>Bayar</span><span>${formatRupiah(t.paid)}</span></div>
       <div class="flex justify-between"><span>Kembali</span><span>${formatRupiah(t.change)}</span></div>
+      <div class="flex justify-between text-slate-500"><span>Metode</span><span>${t.payment_method === 'qris' ? 'QRIS' : 'Tunai'}</span></div>
 
       <div class="border-t border-dashed border-slate-400 my-1"></div>
       <p class="text-center mt-2">${escapeHtml(s.footer_note)}</p>

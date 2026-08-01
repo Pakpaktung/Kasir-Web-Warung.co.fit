@@ -33,6 +33,14 @@ export async function renderSettings() {
       <div id="logo-preview-area" class="flex items-center gap-4">
         ${renderLogoPreview()}
       </div>
+    </div>
+
+    <div class="bg-white rounded-2xl border border-slate-200 p-5 max-w-lg mb-4">
+      <h3 class="font-bold text-slate-800 mb-1 text-sm">📱 Kode QRIS</h3>
+      <p class="text-xs text-slate-400 mb-3">Unggah gambar kode QRIS statis toko Anda (dari QRIS bank/e-wallet Anda). Kode ini akan ditampilkan di layar Pembayaran saat kasir memilih metode QRIS, untuk dipindai pelanggan. <b>Catatan:</b> ini bukan integrasi payment gateway - aplikasi tidak memverifikasi pembayaran secara otomatis, kasir mengonfirmasi manual setelah dana diterima.</p>
+      <div id="qris-preview-area" class="flex items-center gap-4">
+        ${renderQrisPreview()}
+      </div>
     </div>` : ''}
 
     <!-- ============ PRINTER THERMAL ============ -->
@@ -98,7 +106,7 @@ export async function renderSettings() {
 
   document.getElementById('btn-logout').addEventListener('click', confirmLogout);
   wirePrinterButtons();
-  if (canEdit) wireLogoButtons();
+  if (canEdit) { wireLogoButtons(); wireQrisButtons(); }
 
   if (canEdit) {
     document.getElementById('settings-form').addEventListener('submit', async (e) => {
@@ -165,6 +173,53 @@ function wireLogoButtons() {
     showToast('Logo struk dihapus', 'success');
     document.getElementById('logo-preview-area').innerHTML = renderLogoPreview();
     wireLogoButtons();
+  });
+}
+
+function renderQrisPreview() {
+  const qris = state.settings.qris_image_base64;
+  return `
+    <div class="w-20 h-20 rounded-xl border border-dashed border-slate-300 flex items-center justify-center bg-slate-50 shrink-0 overflow-hidden">
+      ${qris ? `<img src="${qris}" class="w-full h-full object-contain" alt="Kode QRIS" />` : `<span class="text-xs text-slate-300 text-center px-1">Belum ada QRIS</span>`}
+    </div>
+    <div class="flex flex-col gap-2">
+      <label class="h-10 px-3 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold flex items-center justify-center cursor-pointer touch-target">
+        ${qris ? 'Ganti Kode QRIS' : 'Unggah Kode QRIS'}
+        <input id="input-qris-file" type="file" accept="image/*" class="hidden" />
+      </label>
+      ${qris ? `<button id="btn-remove-qris" class="h-9 px-3 rounded-lg bg-red-50 text-red-500 text-xs font-semibold touch-target">Hapus QRIS</button>` : ''}
+    </div>
+  `;
+}
+
+function wireQrisButtons() {
+  const fileInput = document.getElementById('input-qris-file');
+  if (fileInput) fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return showToast('File harus berupa gambar', 'error');
+
+    try {
+      // Kode QRIS pakai resolusi sedikit lebih besar (600px) daripada logo agar tetap
+      // mudah dipindai kamera HP walau ditampilkan di layar yang cukup kecil.
+      const dataUrl = await resizeImageToDataUrl(file, 600);
+      await withLoading(api.updateSettings({ qris_image_base64: dataUrl }), 'Gagal menyimpan kode QRIS');
+      state.settings.qris_image_base64 = dataUrl;
+      showToast('Kode QRIS disimpan', 'success');
+      document.getElementById('qris-preview-area').innerHTML = renderQrisPreview();
+      wireQrisButtons();
+    } catch (err) {
+      showToast('Gagal memproses gambar: ' + (err.message || err), 'error');
+    }
+  });
+
+  const removeBtn = document.getElementById('btn-remove-qris');
+  if (removeBtn) removeBtn.addEventListener('click', async () => {
+    await withLoading(api.updateSettings({ qris_image_base64: null }), 'Gagal menghapus kode QRIS');
+    state.settings.qris_image_base64 = null;
+    showToast('Kode QRIS dihapus', 'success');
+    document.getElementById('qris-preview-area').innerHTML = renderQrisPreview();
+    wireQrisButtons();
   });
 }
 

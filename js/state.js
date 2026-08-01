@@ -19,6 +19,7 @@ export const state = {
     discount_percent: 0,
     receipt_width: '80mm',
     logo_base64: null,
+    qris_image_base64: null,
   },
 
   // --- UI ---

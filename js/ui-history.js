@@ -6,7 +6,7 @@
 
 import { state, isAdmin } from './state.js';
 import * as api from './api.js';
-import { formatRupiah, formatTanggal, showToast } from './utils.js';
+import { formatRupiah, formatTanggal, escapeHtml, showToast } from './utils.js';
 import { showReceiptModal } from './ui-receipt.js';
 
 export async function renderHistory() {
@@ -30,8 +30,11 @@ export async function renderHistory() {
         : transactions.map(t => `
           <button data-id="${t.id}" class="history-item w-full text-left p-4 flex items-center justify-between gap-3 hover:bg-slate-50 touch-target">
             <div class="min-w-0">
-              <p class="font-semibold text-slate-800 text-sm">${t.code}</p>
-              <p class="text-xs text-slate-400">${formatTanggal(t.created_at)} • ${t.transaction_items.length} item ${isAdmin() ? `• ${t.profiles?.full_name || '-'}` : ''}</p>
+              <div class="flex items-center gap-1.5">
+                <p class="font-semibold text-slate-800 text-sm">${t.code}</p>
+                <span class="text-[10px] font-semibold px-1.5 py-0.5 rounded ${t.payment_method === 'qris' ? 'bg-brand-50 text-brand-600' : 'bg-slate-100 text-slate-500'}">${t.payment_method === 'qris' ? 'QRIS' : 'TUNAI'}</span>
+              </div>
+              <p class="text-xs text-slate-400">${formatTanggal(t.created_at)} • ${t.transaction_items.length} item ${isAdmin() ? `• ${t.profiles?.full_name || '-'}` : ''}${t.customer_name ? ` • ${escapeHtml(t.customer_name)}` : ''}</p>
             </div>
             <p class="font-bold text-brand-700 font-mono-num shrink-0">${formatRupiah(t.total)}</p>
           </button>
