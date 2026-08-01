@@ -29,7 +29,7 @@ const LOGO_WIDTH_RATIO = 0.35;
 // Contoh: {width:1, height:1} = ukuran normal (hanya tebal/bold).
 //         {width:1, height:2} = tinggi 2x tapi lebar tetap normal (ramping).
 //         {width:2, height:2} = 2x lipat di kedua sisi (besar, tampilan lama).
-const STORE_NAME_WIDTH_MULT = 2;
+const STORE_NAME_WIDTH_MULT = 1;
 const STORE_NAME_HEIGHT_MULT = 1;
 
 let printerDevice = null;
