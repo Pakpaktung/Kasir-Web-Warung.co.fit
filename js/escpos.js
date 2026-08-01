@@ -86,7 +86,93 @@ class EscposBuilder {
     return this.line(left + ' '.repeat(space) + right);
   }
 
+  // Menyisipkan byte mentah (dipakai untuk data bitmap logo) tanpa lewat _text/_push biasa
+  raw(uint8arr) {
+    for (let i = 0; i < uint8arr.length; i++) this.bytes.push(uint8arr[i]);
+    return this;
+  }
+
   toBytes() { return new Uint8Array(this.bytes); }
+}
+
+/* --------------------------- CETAK LOGO (GAMBAR/BITMAP) --------------------------- */
+// Printer thermal TIDAK bisa mencetak <img> atau file gambar langsung seperti
+// browser. Gambar harus diubah dulu menjadi bitmap hitam-putih (1-bit per
+// piksel) dan dikirim memakai perintah ESC/POS raster image "GS v 0".
+// Alur: base64 -> <canvas> -> ambil piksel -> dithering ke hitam/putih -> pack jadi byte.
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Gagal memuat gambar logo'));
+    img.src = src;
+  });
+}
+
+// Mengubah Data URL logo menjadi bitmap 1-bit siap cetak, dilebarkan/diperkecil
+// ke `maxWidthDots` (lebar kertas dalam dot, BUKAN pixel gambar asli).
+// Memakai dithering Floyd-Steinberg supaya logo dengan gradasi/anti-alias
+// tetap terlihat wajar walau hasil akhirnya cuma hitam-putih murni (tanpa abu-abu).
+async function imageToEscposRaster(dataUrl, maxWidthDots) {
+  const img = await loadImageElement(dataUrl);
+  const width = Math.min(img.width, maxWidthDots);
+  const height = Math.max(1, Math.round(img.height * (width / img.width)));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff'; // latar putih dulu, supaya logo transparan (PNG) tidak jadi hitam pekat saat di-threshold
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(img, 0, 0, width, height);
+
+  const { data } = ctx.getImageData(0, 0, width, height);
+  const gray = new Float32Array(width * height);
+  for (let i = 0; i < width * height; i++) {
+    gray[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+  }
+
+  const bytesPerRow = Math.ceil(width / 8);
+  const bitmap = new Uint8Array(bytesPerRow * height);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      const oldVal = gray[idx];
+      const newVal = oldVal < 128 ? 0 : 255; // threshold hitam/putih
+      const err = oldVal - newVal;
+      gray[idx] = newVal;
+
+      // Sebarkan galat pembulatan ke piksel tetangga (Floyd-Steinberg)
+      if (x + 1 < width) gray[idx + 1] += err * 7 / 16;
+      if (y + 1 < height) {
+        if (x > 0) gray[idx + width - 1] += err * 3 / 16;
+        gray[idx + width] += err * 5 / 16;
+        if (x + 1 < width) gray[idx + width + 1] += err * 1 / 16;
+      }
+
+      if (newVal === 0) { // piksel hitam -> nyalakan bit-nya (MSB-first per byte)
+        bitmap[y * bytesPerRow + (x >> 3)] |= (0x80 >> (x & 7));
+      }
+    }
+  }
+
+  return { width, height, bytesPerRow, bitmap };
+}
+
+// Membungkus bitmap hasil imageToEscposRaster() menjadi perintah ESC/POS "GS v 0"
+// (raster bit image, mode normal), format: GS v 0 m xL xH yL yH d1...dk
+function buildRasterImageCommand({ bytesPerRow, height, bitmap }) {
+  const header = new Uint8Array([
+    0x1D, 0x76, 0x30, 0x00,
+    bytesPerRow & 0xFF, (bytesPerRow >> 8) & 0xFF, // lebar dalam byte (xL, xH)
+    height & 0xFF, (height >> 8) & 0xFF,            // tinggi dalam dot (yL, yH)
+  ]);
+  const full = new Uint8Array(header.length + bitmap.length);
+  full.set(header, 0);
+  full.set(bitmap, header.length);
+  return full;
 }
 
 // Menyusun & mengirim struk dalam format ESC/POS berdasarkan lebar kertas (32 kolom
@@ -95,7 +181,21 @@ export async function printReceiptESCPOS(transaction, settings) {
   if (!printerCharacteristic) throw new Error('Printer belum terhubung');
 
   const width = settings?.receipt_width === '58mm' ? 32 : 48;
+  // Lebar kertas dalam DOT (bukan kolom teks) untuk cetak bitmap logo -- perkiraan
+  // umum printer thermal 203dpi: 58mm ≈ 384 dot, 80mm ≈ 576 dot.
+  const dotWidth = settings?.receipt_width === '58mm' ? 384 : 576;
   const b = new EscposBuilder();
+
+  if (settings.logo_base64) {
+    try {
+      const raster = await imageToEscposRaster(settings.logo_base64, dotWidth);
+      b.align('center').raw(buildRasterImageCommand(raster)).feed(1);
+    } catch (err) {
+      // Logo gagal diproses (mis. format tidak didukung) -> lanjutkan cetak tanpa logo,
+      // jangan sampai seluruh struk gagal cetak hanya karena masalah logo.
+      console.warn('Gagal mencetak logo ESC/POS:', err);
+    }
+  }
 
   b.align('center').bold(true).doubleSize(true).line(settings.store_name).doubleSize(false).bold(false);
   if (settings.address) b.line(settings.address);
