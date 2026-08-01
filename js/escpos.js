@@ -17,6 +17,21 @@
 const PRINTER_SERVICE_UUID = '000018f0-0000-1000-8000-00805f9b34fb';
 const PRINTER_CHARACTERISTIC_UUID = '00002af1-0000-1000-8000-00805f9b34fb';
 
+// ============================================================================
+// PENGATURAN UKURAN CETAK -- ubah nilai di sini untuk menyesuaikan tampilan struk.
+// ============================================================================
+// Lebar logo = LOGO_WIDTH_RATIO x lebar kertas. 1.0 = selebar kertas (penuh),
+// 0.5 = separuh lebar kertas, dst. Perkecil nilainya kalau logo masih terlalu besar.
+const LOGO_WIDTH_RATIO = 0.45;
+
+// Ukuran teks nama toko: 1 = normal, 2 = 2x lipat, 3 = 3x lipat, dst (maks. 8).
+// STORE_NAME_WIDTH_MULT mengatur lebar, STORE_NAME_HEIGHT_MULT mengatur tinggi.
+// Contoh: {width:1, height:1} = ukuran normal (hanya tebal/bold).
+//         {width:1, height:2} = tinggi 2x tapi lebar tetap normal (ramping).
+//         {width:2, height:2} = 2x lipat di kedua sisi (besar, tampilan lama).
+const STORE_NAME_WIDTH_MULT = 1;
+const STORE_NAME_HEIGHT_MULT = 1;
+
 let printerDevice = null;
 let printerCharacteristic = null;
 
@@ -61,8 +76,7 @@ export function disconnectPrinter() {
 //   \x1B \x40        -> reset/initialize printer
 //   \x1B \x61 \x00/01/02 -> text align: kiri/tengah/kanan
 //   \x1B \x45 \x01/00 -> bold on/off
-//   \x1D \x21 \x11    -> ukuran teks 2x (lebar & tinggi)
-//   \x1D \x21 \x00    -> ukuran teks normal
+//   \x1D \x21 n       -> ukuran teks: n = (heightMult-1)<<4 | (widthMult-1), lihat textSize()
 //   \x0A              -> line feed (ganti baris)
 //   \x1D \x56 \x42 \x00 -> potong kertas (partial cut), tidak semua printer mendukung
 
@@ -74,7 +88,13 @@ class EscposBuilder {
 
   align(pos) { const map = { left: 0, center: 1, right: 2 }; return this._push([0x1B, 0x61, map[pos] ?? 0]); }
   bold(on) { return this._push([0x1B, 0x45, on ? 1 : 0]); }
-  doubleSize(on) { return this._push([0x1D, 0x21, on ? 0x11 : 0x00]); }
+  // widthMult & heightMult: 1 (normal) sampai 8 (8x lipat). Ini menggantikan
+  // doubleSize(true/false) lama yang selalu mengalikan 2x di kedua sisi.
+  textSize(widthMult = 1, heightMult = 1) {
+    const w = Math.min(Math.max(widthMult, 1), 8) - 1;
+    const h = Math.min(Math.max(heightMult, 1), 8) - 1;
+    return this._push([0x1D, 0x21, (h << 4) | w]);
+  }
   line(str = '') { return this._text(str + '\n'); }
   feed(n = 1) { return this._push(new Array(n).fill(0x0A)); }
   divider(width = 32) { return this.line('-'.repeat(width)); }
@@ -188,7 +208,8 @@ export async function printReceiptESCPOS(transaction, settings) {
 
   if (settings.logo_base64) {
     try {
-      const raster = await imageToEscposRaster(settings.logo_base64, dotWidth);
+      const logoWidthDots = Math.round(dotWidth * LOGO_WIDTH_RATIO);
+      const raster = await imageToEscposRaster(settings.logo_base64, logoWidthDots);
       b.align('center').raw(buildRasterImageCommand(raster)).feed(1);
     } catch (err) {
       // Logo gagal diproses (mis. format tidak didukung) -> lanjutkan cetak tanpa logo,
@@ -197,7 +218,7 @@ export async function printReceiptESCPOS(transaction, settings) {
     }
   }
 
-  b.align('center').bold(true).doubleSize(true).line(settings.store_name).doubleSize(false).bold(false);
+  b.align('center').bold(true).textSize(STORE_NAME_WIDTH_MULT, STORE_NAME_HEIGHT_MULT).line(settings.store_name).textSize(1, 1).bold(false);
   if (settings.address) b.line(settings.address);
   if (settings.phone) b.line(settings.phone);
   b.divider(width);
