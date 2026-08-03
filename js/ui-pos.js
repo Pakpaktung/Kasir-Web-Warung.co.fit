@@ -173,18 +173,29 @@ function renderProductGridItems() {
     return `<div class="col-span-full text-center text-slate-400 py-10 text-sm">Produk tidak ditemukan.</div>`;
   }
 
-  return filtered.map(p => `
-    <button data-id="${p.id}" ${p.stock <= 0 ? 'disabled' : ''}
-      class="pos-product-card ${p.stock <= 0 ? 'opacity-40 cursor-not-allowed' : ''} touch-target
-        bg-white rounded-xl border border-slate-200 p-3 text-left hover:border-brand-400 hover:shadow-md active:scale-95 transition flex flex-col">
-      <div class="w-full aspect-square rounded-lg bg-brand-50 text-brand-400 flex items-center justify-center text-2xl mb-2">
-        ${p.category === 'Minuman' ? '🥤' : p.category === 'Makanan' ? '🍽️' : '🍪'}
+  return filtered.map(p => {
+    const isOut = p.stock <= 0;
+    const isLow = !isOut && p.stock <= 5;
+    const emoji = p.category === 'Minuman' ? '🥤' : p.category === 'Makanan' ? '🍽️' : '🍪';
+
+    return `
+    <button data-id="${p.id}" ${isOut ? 'disabled' : ''}
+      class="pos-product-card ${isOut ? 'opacity-50 cursor-not-allowed' : ''} touch-target
+        min-h-[132px] bg-white rounded-xl border-2 border-slate-200 p-3 text-left
+        hover:border-brand-400 hover:shadow-md active:scale-95 transition flex flex-col justify-between">
+      <div class="flex items-start gap-2">
+        <span class="text-xl leading-none shrink-0 mt-0.5">${emoji}</span>
+        <p class="text-sm font-bold text-slate-900 leading-snug break-words">${escapeHtml(p.name)}</p>
       </div>
-      <p class="text-sm font-semibold text-slate-800 leading-tight line-clamp-2">${escapeHtml(p.name)}</p>
-      <p class="text-xs text-slate-400 mb-1">Stok: ${p.stock}</p>
-      <p class="text-sm font-bold text-brand-700 mt-auto font-mono-num">${formatRupiah(p.price)}</p>
+      <div class="flex items-end justify-between gap-2 mt-3">
+        <span class="text-[11px] font-semibold shrink-0 ${isOut ? 'text-red-500' : isLow ? 'text-amber-600' : 'text-slate-400'}">
+          Stok: ${p.stock}
+        </span>
+        <span class="text-base font-extrabold text-brand-700 font-mono-num whitespace-nowrap">${formatRupiah(p.price)}</span>
+      </div>
     </button>
-  `).join('');
+  `;
+  }).join('');
 }
 
 function attachProductGridEvents() {
